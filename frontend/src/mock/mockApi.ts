@@ -23,6 +23,8 @@ import type {
   SubscriptionInput,
   UserProfile,
   UserStub,
+  WorkerCard,
+  WorkersQuery,
 } from '../types';
 import { ME_ID, buildWorld, initialSubscriptions, m, meta, metro, msk, users, type JobRec, type ResponseRec, type UserRec } from './fixture';
 
@@ -45,6 +47,10 @@ const reports: { job_id: number; reason: ReportReason; text: string | null }[] =
 
 const world = buildWorld();
 const saved: number[] = []; // id заявок в избранном, недавние в начале
+const invites: { job_id: number; worker_id: number }[] = world.jobs
+  .filter((j) => j.employer_id !== ME_ID && j.status === 'open')
+  .slice(1, 2)
+  .map((j) => ({ job_id: j.id, worker_id: ME_ID }));
 let subs: Subscription[] = initialSubscriptions.map((s) => ({ ...s }));
 let seq = 1000;
 const now = () => Date.now();
@@ -103,6 +109,7 @@ function serializeJob(j: JobRec, here: { lat: number; lng: number } | null = nul
     accepted_count: rs.filter((r) => r.status === 'accepted').length,
     is_mine: isMine,
     is_saved: saved.includes(j.id),
+    is_invited: invites.some((i) => i.job_id === j.id && i.worker_id === ME_ID),
     my_response: mineResp ? serializeResponse(mineResp) : null,
   };
   if (isMine && full) job.responses = rs.sort((a, b) => b.created_at.localeCompare(a.created_at)).map(serializeResponse);
@@ -412,6 +419,7 @@ export const mockApi = {
       role: u.role,
       about: u.about,
       skills: u.skills ?? [],
+      invited_job_ids: me().role === 'employer' ? invites.filter((i) => i.worker_id === id).map((i) => i.job_id) : [],
       ...ratingOf(id),
       jobs_count: jobsCount,
       reviews: world.reviews
@@ -419,6 +427,38 @@ export const mockApi = {
         .sort((a, b) => b.created_at.localeCompare(a.created_at))
         .map((r) => ({ rating: r.rating, text: r.text, author: { id: r.author_id, first_name: user(r.author_id).first_name }, job_title: r.job_title, created_at: r.created_at })),
     });
+  },
+
+  workers(q: WorkersQuery): Promise<{ total: number; items: WorkerCard[] }> {
+    const denied = needRole('employer');
+    if (denied) return denied;
+    const text = (q.q ?? '').trim().toLowerCase();
+    const list = users
+      .filter((u) => u.role === 'worker' && u.id !== ME_ID && ((u.skills?.length ?? 0) > 0 || u.about))
+      .filter((u) => !q.category || u.skills?.includes(q.category))
+      .filter((u) => !text || `${u.first_name} ${u.about ?? ''}`.toLowerCase().includes(text))
+      .map((u) => ({
+        id: u.id,
+        first_name: u.first_name,
+        about: u.about,
+        skills: u.skills ?? [],
+        ...ratingOf(u.id),
+        jobs_count: u.done_before + world.responses.filter((r) => r.worker_id === u.id && r.status === 'accepted').length,
+      }))
+      .sort((a, b) => (b.rating ?? -1) - (a.rating ?? -1) || b.reviews_count - a.reviews_count);
+    const offset = q.offset ?? 0;
+    return delay({ total: list.length, items: list.slice(offset, offset + (q.limit ?? 30)) });
+  },
+
+  invite(jobId: number, workerId: number): Promise<void> {
+    const j = jobRec(jobId);
+    if (!j || j.employer_id !== ME_ID) return fail(404, 'Заявка не найдена');
+    if (j.status !== 'open' || expired(j)) return fail(409, 'Пригласить можно только на открытую заявку');
+    if (world.responses.some((r) => r.job_id === jobId && r.worker_id === workerId && (r.status === 'pending' || r.status === 'accepted')))
+      return fail(409, 'Он уже откликнулся на эту заявку');
+    if (invites.some((i) => i.job_id === jobId && i.worker_id === workerId)) return fail(409, 'Вы уже пригласили его на эту заявку');
+    invites.push({ job_id: jobId, worker_id: workerId });
+    return delay(undefined, 300);
   },
 
   subscriptions(): Promise<Subscription[]> {

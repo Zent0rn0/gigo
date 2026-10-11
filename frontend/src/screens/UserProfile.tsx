@@ -5,9 +5,22 @@ import { Icon } from '../components/Icon';
 import { Avatar, SkillChips, Stars } from '../components/ui';
 import { formatDate, formatRating, plural } from '../format';
 import { backButtonSupported } from '../telegram';
-import type { Meta, UserProfile as Profile } from '../types';
+import { InviteSheet } from '../components/InviteSheet';
+import type { Meta, UserProfile as Profile, Role } from '../types';
 
-export function UserProfile({ userId, isMe, meta, onBack }: { userId: number; isMe: boolean; meta: Meta; onBack(): void }) {
+interface Props {
+  userId: number;
+  isMe: boolean;
+  meta: Meta;
+  /** Роль смотрящего: заказчик может пригласить исполнителя на заявку. */
+  viewerRole: Role | null;
+  onBack(): void;
+  onCreateJob(): void;
+  toast(text: string): void;
+}
+
+export function UserProfile({ userId, isMe, meta, viewerRole, onBack, onCreateJob, toast }: Props) {
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [user, setUser] = useState<Profile | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'notfound' | 'error'>('loading');
   const [error, setError] = useState('');
@@ -37,6 +50,7 @@ export function UserProfile({ userId, isMe, meta, onBack }: { userId: number; is
   }, [userId, attempt]);
 
   useEffect(() => window.scrollTo(0, 0), [userId]);
+  const canInvite = !!user && !isMe && viewerRole === 'employer' && user.role === 'worker';
 
   return (
     <div className="screen screen--detail">
@@ -84,6 +98,12 @@ export function UserProfile({ userId, isMe, meta, onBack }: { userId: number; is
             </div>
             {user.role === 'worker' && !!user.skills?.length && <SkillChips ids={user.skills} meta={meta} />}
             {user.about && <p className="detail__desc profile-card__about">{user.about}</p>}
+            {canInvite && (
+              <button type="button" className="btn btn--primary btn--wide profile-card__invite" onClick={() => setInviteOpen(true)}>
+                <Icon name="send" size={18} />
+                {user.invited_job_ids?.length ? 'Пригласить ещё на заявку' : 'Пригласить на заявку'}
+              </button>
+            )}
           </div>
 
           {user.reviews.length === 0 && user.rating == null && (
@@ -110,6 +130,20 @@ export function UserProfile({ userId, isMe, meta, onBack }: { userId: number; is
             </section>
           )}
         </>
+      )}
+      {inviteOpen && user && (
+        <InviteSheet
+          workerId={user.id}
+          workerName={user.first_name}
+          invited={user.invited_job_ids ?? []}
+          onInvited={(jobId) => setUser({ ...user, invited_job_ids: [...(user.invited_job_ids ?? []), jobId] })}
+          onCreate={() => {
+            setInviteOpen(false);
+            onCreateJob();
+          }}
+          onClose={() => setInviteOpen(false)}
+          toast={toast}
+        />
       )}
     </div>
   );

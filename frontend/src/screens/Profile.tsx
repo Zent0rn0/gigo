@@ -153,7 +153,7 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
               );
             })}
           </div>
-          <div className="hint small">Заказчик увидит это в вашем отклике, а в ленте появится фильтр «Только мои навыки».</div>
+          <div className="hint small">Заказчики увидят это в отклике и найдут вас в каталоге исполнителей, а в ленте появится фильтр «Только мои навыки».</div>
         </section>
       )}
 

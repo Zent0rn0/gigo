@@ -89,3 +89,34 @@ async def test_edit_job(client, pool):
 
     await client.patch(f"/api/jobs/{jid}", json={"status": "closed"}, headers=e)
     assert (await client.put(f"/api/jobs/{jid}", json=job_body(), headers=e)).status_code == 409
+
+
+async def test_workers_catalog_and_invites(client, pool):
+    await _metro(pool)
+    await _roles(client)
+    e = auth(EMPLOYER)
+    await client.patch("/api/me", json={"skills": ["loader"], "about": "Сильный"})
+    silent = auth(888)
+    await client.patch("/api/me", json={"role": "worker"}, headers=silent)  # пустой профиль: не в каталоге
+
+    assert (await client.get("/api/workers")).status_code == 403  # каталог для заказчика
+    cat = (await client.get("/api/workers", headers=e)).json()
+    assert cat["total"] == 1 and cat["items"][0]["id"] == WORKER and cat["items"][0]["skills"] == ["loader"]
+    assert (await client.get("/api/workers", params={"category": "driver"}, headers=e)).json()["total"] == 0
+    assert (await client.get("/api/workers", params={"q": "сильн"}, headers=e)).json()["total"] == 1
+
+    job = (await client.post("/api/jobs", json=job_body(), headers=e)).json()
+    url = f"/api/jobs/{job['id']}/invites"
+    assert (await client.post(url, json={"worker_id": WORKER})).status_code == 404  # чужая заявка
+    assert (await client.post(url, json={"worker_id": EMPLOYER}, headers=e)).status_code == 404  # не исполнитель
+    assert (await client.post(url, json={"worker_id": WORKER}, headers=e)).status_code == 204
+    assert (await client.post(url, json={"worker_id": WORKER}, headers=e)).status_code == 409  # повторно
+    assert (await client.get(f"/api/users/{WORKER}", headers=e)).json()["invited_job_ids"] == [job["id"]]
+    assert (await client.get(f"/api/jobs/{job['id']}")).json()["is_invited"] is True
+
+    await client.post(f"/api/jobs/{job['id']}/responses", json={}, headers=silent)
+    assert (await client.post(url, json={"worker_id": 888}, headers=e)).status_code == 409  # уже откликнулся
+
+    bot = FakeBot()
+    await send_outbox_once(bot, pool, config.load())
+    assert any(uid == WORKER and "приглашает вас" in text for uid, text in bot.sent)

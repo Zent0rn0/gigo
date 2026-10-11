@@ -1,11 +1,11 @@
 import type { Role } from '../types';
 import { Icon, type IconName } from './Icon';
 
-export type Tab = 'feed' | 'map' | 'responses' | 'my' | 'create' | 'profile';
+export type Tab = 'feed' | 'map' | 'responses' | 'my' | 'create' | 'workers' | 'profile';
 
 export const ROLE_TABS: Record<Role, Tab[]> = {
   worker: ['feed', 'map', 'responses', 'profile'],
-  employer: ['my', 'create', 'profile'],
+  employer: ['my', 'create', 'workers', 'profile'],
 };
 
 const TABS: Record<Tab, { label: string; icon: IconName }> = {
@@ -14,6 +14,7 @@ const TABS: Record<Tab, { label: string; icon: IconName }> = {
   responses: { label: 'Отклики', icon: 'inbox' },
   my: { label: 'Мои заявки', icon: 'clipboard' },
   create: { label: 'Создать', icon: 'plus-circle' },
+  workers: { label: 'Исполнители', icon: 'users' },
   profile: { label: 'Профиль', icon: 'user' },
 };
 

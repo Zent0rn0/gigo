@@ -18,6 +18,8 @@ import type {
   Subscription,
   SubscriptionInput,
   UserProfile,
+  WorkerCard,
+  WorkersQuery,
 } from './types';
 
 export const MOCK = import.meta.env.VITE_MOCK === '1';
@@ -214,6 +216,22 @@ export const api = {
   async user(id: number): Promise<UserProfile> {
     if (MOCK) return (await mock()).user(id);
     return request<UserProfile>(`/users/${id}`);
+  },
+
+  async workers(q: WorkersQuery, signal?: AbortSignal): Promise<{ total: number; items: WorkerCard[] }> {
+    if (MOCK) return (await mock()).workers(q);
+    const p = new URLSearchParams();
+    if (q.category) p.set('category', q.category);
+    if (q.q?.trim()) p.set('q', q.q.trim());
+    if (q.limit != null) p.set('limit', String(q.limit));
+    if (q.offset) p.set('offset', String(q.offset));
+    const qs = p.toString();
+    return request(`/workers${qs ? `?${qs}` : ''}`, { signal });
+  },
+
+  async invite(jobId: number, workerId: number): Promise<void> {
+    if (MOCK) return (await mock()).invite(jobId, workerId);
+    await request<void>(`/jobs/${jobId}/invites`, json('POST', { worker_id: workerId }));
   },
 
   async subscriptions(): Promise<Subscription[]> {

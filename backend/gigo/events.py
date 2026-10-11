@@ -111,3 +111,10 @@ async def job_edited(conn, job, worker_id: int) -> None:
     await push(conn, worker_id,
                f"✏️ Заказчик изменил заявку «{esc(job['title'])}». Проверьте время, место и оплату.",
                [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])
+
+
+async def invited(conn, job, employer_name: str | None, worker_id: int) -> None:
+    await push(conn, worker_id,
+               f"📩 {esc(employer_name or 'Заказчик')} приглашает вас на «{esc(job['title'])}». "
+               "Откройте заявку и откликнитесь, если подходит.",
+               [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])

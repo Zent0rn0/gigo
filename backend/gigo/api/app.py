@@ -22,7 +22,7 @@ from gigo.actions import check_recent
 from gigo.api.limits import RateLimiter
 from gigo.categories import CATEGORIES, PAY_UNITS
 from gigo.geo import Geocoder
-from gigo.jobs_query import JobFilter, build_feed, jobs_where, rating_join, responses_where
+from gigo.jobs_query import JobFilter, build_feed, jobs_where, like_pattern, rating_join, responses_where
 from gigo.migrate import migrate
 
 log = logging.getLogger("gigo.api")
@@ -194,7 +194,7 @@ async def patch_me(request: Request, body: MeIn, user: User):
 
 
 @app.get("/api/users/{user_id}")
-async def get_user(request: Request, user_id: int, _: User):
+async def get_user(request: Request, user_id: int, viewer: User):
     p = pool(request)
     r = await p.fetchrow(ME_SQL, user_id)
     if not r:
@@ -211,7 +211,12 @@ async def get_user(request: Request, user_id: int, _: User):
            WHERE rv.target_id = $1 ORDER BY rv.created_at DESC LIMIT 50""",
         user_id,
     )
+    # заказчику: на какие его заявки этот человек уже приглашён
+    invited = [row["job_id"] for row in await p.fetch(
+        "SELECT i.job_id FROM invites i JOIN jobs j ON j.id = i.job_id WHERE i.worker_id = $1 AND j.employer_id = $2",
+        user_id, viewer.id)] if viewer.role == "employer" and viewer.id != user_id else []
     return {
+        "invited_job_ids": invited,
         "id": r["tg_id"], "first_name": r["first_name"], "role": r["role"], "about": r["about"],
         "skills": list(r["skills"]), "rating": _num(r["rating"]), "reviews_count": r["reviews_count"], "jobs_count": jobs_count,
         "reviews": [{"rating": v["rating"], "text": v["text"], "job_title": v["job_title"],
@@ -298,6 +303,7 @@ def job_out(r, my_response: dict | None = None) -> dict:
         "accepted_count": r["accepted_count"],
         "is_mine": r["is_mine"],
         "is_saved": r["is_saved"],
+        "is_invited": r["is_invited"],
         "my_response": my_response,
         "created_at": _ts(r["created_at"]),
         "expires_at": _ts(r["expires_at"]),
@@ -518,6 +524,72 @@ async def save_job(request: Request, job_id: int, user: User):
 @app.delete("/api/jobs/{job_id}/save", status_code=204)
 async def unsave_job(request: Request, job_id: int, user: User):
     await pool(request).execute("DELETE FROM saved_jobs WHERE user_id = $1 AND job_id = $2", user.id, job_id)
+    return Response(status_code=204)
+
+
+# --- каталог исполнителей и приглашения -----------------------------------------
+
+@app.get("/api/workers")
+async def list_workers(
+    request: Request,
+    user: User,
+    category: str | None = None,
+    q: Annotated[str | None, Query(max_length=100)] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 30,
+    offset: Annotated[int, Query(ge=0)] = 0,
+):
+    """Исполнители с заполненным профилем (навыки или «О себе»): лучшие по рейтингу сверху."""
+    require_role(user, "employer")
+    where = ["u.role = 'worker'", "u.banned_at IS NULL", "u.tg_id <> $1",
+             "(cardinality(u.skills) > 0 OR u.about IS NOT NULL)"]
+    params: list = [user.id]
+    if category:
+        params.append(category)
+        where.append(f"${len(params)} = ANY(u.skills)")
+    if q := _clean(q):
+        params.append(like_pattern(q))
+        where.append(f"(u.first_name ILIKE ${len(params)} OR u.about ILIKE ${len(params)})")
+    base = f"FROM users u {rating_join('ur', 'u.tg_id')} WHERE {' AND '.join(where)}"
+    p = pool(request)
+    rows = await p.fetch(
+        f"""SELECT u.tg_id, u.first_name, u.about, u.skills, ur.rating, ur.reviews_count,
+                   (SELECT count(*) FROM responses r WHERE r.worker_id = u.tg_id AND r.status = 'accepted') AS jobs_count
+            {base} ORDER BY ur.rating DESC NULLS LAST, ur.reviews_count DESC, u.last_seen_at DESC, u.tg_id
+            LIMIT {int(limit)} OFFSET {int(offset)}""", *params)
+    total = await p.fetchval(f"SELECT count(*) {base}", *params)
+    return {"total": total, "items": [
+        {"id": r["tg_id"], "first_name": r["first_name"], "about": r["about"], "skills": list(r["skills"]),
+         "rating": _num(r["rating"]), "reviews_count": r["reviews_count"], "jobs_count": r["jobs_count"]}
+        for r in rows]}
+
+
+class InviteIn(BaseModel):
+    worker_id: int
+
+
+@app.post("/api/jobs/{job_id}/invites", status_code=204)
+async def invite_worker(request: Request, job_id: int, body: InviteIn, user: User):
+    """Пригласить исполнителя на свою открытую заявку: ему пишет бот со ссылкой на заявку."""
+    p = pool(request)
+    async with p.acquire() as conn, conn.transaction():
+        job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
+        if not job or job["employer_id"] != user.id:
+            raise HTTPException(404, "Заявка не найдена")
+        if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc) or job["hidden_at"]:
+            raise HTTPException(409, "Пригласить можно только на открытую заявку")
+        worker = await conn.fetchrow("SELECT role, banned_at FROM users WHERE tg_id = $1", body.worker_id)
+        if not worker or worker["role"] != "worker" or worker["banned_at"]:
+            raise HTTPException(404, "Исполнитель не найден")
+        if await conn.fetchval("SELECT 1 FROM responses WHERE job_id = $1 AND worker_id = $2 "
+                               "AND status IN ('pending', 'accepted')", job_id, body.worker_id):
+            raise HTTPException(409, "Он уже откликнулся на эту заявку")
+        await check_recent(conn, "SELECT count(*) FROM invites i JOIN jobs j ON j.id = i.job_id "
+                                 "WHERE j.employer_id = $1 AND i.created_at > now() - interval '1 hour'",
+                           user.id, 30, "Не больше 30 приглашений в час. Попробуйте позже.")
+        if not await conn.fetchval("INSERT INTO invites (job_id, worker_id) VALUES ($1, $2) "
+                                   "ON CONFLICT DO NOTHING RETURNING 1", job_id, body.worker_id):
+            raise HTTPException(409, "Вы уже пригласили его на эту заявку")
+        await events.invited(conn, job, user.first_name, body.worker_id)
     return Response(status_code=204)
 
 

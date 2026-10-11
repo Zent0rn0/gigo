@@ -135,6 +135,8 @@ export interface Job {
   is_mine: boolean;
   /** Смотрящий сохранил заявку в избранное. */
   is_saved?: boolean;
+  /** Заказчик пригласил смотрящего на эту заявку. */
+  is_invited?: boolean;
   my_response: JobResponse | null;
   created_at: string;
   expires_at: string;
@@ -201,6 +203,26 @@ export interface UserProfile {
   reviews_count: number;
   jobs_count: number;
   reviews: PublicReview[];
+  /** Заказчику: его заявки, на которые этот исполнитель уже приглашён. */
+  invited_job_ids?: number[];
+}
+
+/** Карточка в каталоге исполнителей: GET /api/workers. */
+export interface WorkerCard {
+  id: number;
+  first_name: string;
+  about: string | null;
+  skills: string[];
+  rating: number | null;
+  reviews_count: number;
+  jobs_count: number;
+}
+
+export interface WorkersQuery {
+  category?: string | null;
+  q?: string;
+  limit?: number;
+  offset?: number;
 }
 
 export interface ReviewIn {
