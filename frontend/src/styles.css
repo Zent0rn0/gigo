@@ -1501,3 +1501,35 @@ a {
   color: var(--hint);
   font-size: 26px;
 }
+
+/* выбор места на карте */
+.point-map {
+  position: relative;
+  height: 56vh;
+  height: 56dvh;
+  margin-bottom: 8px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.point-map__map {
+  position: absolute;
+  inset: 0;
+}
+
+.point-map__pin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -100%);
+  font-size: 34px;
+  line-height: 1;
+  pointer-events: none;
+}
+
+.place-point {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

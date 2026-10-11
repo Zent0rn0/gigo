@@ -2,10 +2,12 @@ import { useRef, useState } from 'react';
 import { api, errorText } from '../api';
 import { MetroPicker } from '../components/MetroPicker';
 import { MetroDot } from '../components/MetroDot';
+import { PointPicker, type Point } from '../components/PointPicker';
 import { estimatePerHour, mskDay, rub } from '../format';
 import { useMainButton } from '../mainButton';
 import { haptic, mainButtonSupported } from '../telegram';
 import type { Job, JobIn, Meta, PayUnit } from '../types';
+import { YMAPS_KEY } from '../ymaps';
 
 interface Props {
   meta: Meta;
@@ -30,6 +32,7 @@ interface Form {
   duration: string;
   metroId: string | null;
   address: string;
+  point: Point | null;
 }
 
 const EMPTY: Form = {
@@ -46,6 +49,7 @@ const EMPTY: Form = {
   duration: '',
   metroId: null,
   address: '',
+  point: null,
 };
 
 const TIMING_PRESETS = ['сразу', 'в конце дня', 'на следующий день'];
@@ -82,7 +86,7 @@ function validate(f: Form): Errors {
   }
   const dur = num(f.duration);
   if (f.duration.trim() && (dur == null || dur < 0.5 || dur > 24)) e.duration = 'От 0,5 до 24 часов';
-  if (!f.metroId && !f.address.trim()) e.place = 'Укажите метро или адрес';
+  if (!f.metroId && !f.address.trim() && !f.point) e.place = 'Укажите метро, адрес или точку на карте';
   return e;
 }
 
@@ -100,6 +104,8 @@ function toBody(f: Form): JobIn {
     duration_hours: num(f.duration),
     metro_id: f.metroId,
     address: f.address.trim() || null,
+    lat: f.point?.lat ?? null,
+    lng: f.point?.lng ?? null,
   };
 }
 
@@ -109,6 +115,7 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState('');
   const [metroOpen, setMetroOpen] = useState(false);
+  const [pointOpen, setPointOpen] = useState(false);
   const errorRef = useRef<HTMLDivElement | null>(null);
 
   const set = (patch: Partial<Form>) => {
@@ -149,7 +156,7 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
     }
   };
 
-  useMainButton(active && !metroOpen ? { text: 'Опубликовать заявку', onClick: submit, progress: busy } : null);
+  useMainButton(active && !metroOpen && !pointOpen ? { text: 'Опубликовать заявку', onClick: submit, progress: busy } : null);
 
   const cls = (k: keyof Errors) => `field${shown[k] ? ' field--error' : ''}`;
   const err = (k: keyof Errors) => shown[k] && <div className="field__error">{shown[k]}</div>;
@@ -355,6 +362,21 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
             value={form.address}
             onChange={(e) => set({ address: e.target.value })}
           />
+          {YMAPS_KEY &&
+            (form.point ? (
+              <div className="place-point">
+                <button type="button" className="btn btn--sm" onClick={() => setPointOpen(true)}>
+                  📍 Точка на карте выбрана
+                </button>
+                <button type="button" className="icon-btn" onClick={() => set({ point: null })} aria-label="Убрать точку">
+                  ✕
+                </button>
+              </div>
+            ) : (
+              <button type="button" className="btn btn--sm" onClick={() => setPointOpen(true)}>
+                📍 Указать на карте
+              </button>
+            ))}
           {err('place')}
         </div>
 
@@ -372,6 +394,18 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
         )}
         <div className="hint small center">Без предоплат и «оформления»: такие заявки не пропускаем.</div>
       </form>
+
+      {pointOpen && (
+        <PointPicker
+          center={form.point ?? (station ? { lat: station.lat, lng: station.lng } : { lat: meta.city.lat, lng: meta.city.lng })}
+          zoom={form.point || station ? 16 : 11}
+          onClose={() => setPointOpen(false)}
+          onApply={(point, address) => {
+            setPointOpen(false);
+            set({ point, ...(address && !form.address.trim() ? { address } : {}) });
+          }}
+        />
+      )}
 
       {metroOpen && (
         <MetroPicker
