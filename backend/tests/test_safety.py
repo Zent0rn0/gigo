@@ -121,7 +121,8 @@ async def test_accept_from_bot_buttons(client, pool):
     settings = config.load()
     kb = keyboard(settings, buttons)
     assert [b.callback_data for b in kb.inline_keyboard[0]] == [f"acc:{resp['id']}", f"rej:{resp['id']}"]
-    assert len(kb.inline_keyboard) == 1  # без WEBAPP_URL кнопка приложения пропускается
+    # без WEBAPP_URL кнопка приложения пропускается, кнопка списка откликов в чате остаётся
+    assert [[b.callback_data for b in row] for row in kb.inline_keyboard[1:]] == [[f"rl:{job['id']}"]]
 
     # кнопку нажал не заказчик
     async with pool.acquire() as conn:
@@ -182,7 +183,8 @@ async def test_bot_callbacks(client, pool):
     job = await _job(client, pool)
     resp = (await client.post(f"/api/jobs/{job['id']}/responses", json={})).json()
     dp = make_dispatcher(config.load(), pool)
-    decide, moderate = (h.callback for h in dp.callback_query.handlers)
+    handlers = {h.callback.__name__: h.callback for r in dp.sub_routers for h in r.callback_query.handlers}
+    decide, moderate = handlers["decide"], handlers["moderate"]
 
     call = _FakeCall(f"acc:{resp['id']}", WORKER)          # не заказчик
     await decide(call)

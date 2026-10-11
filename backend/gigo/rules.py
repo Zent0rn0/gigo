@@ -22,6 +22,14 @@ def scam_flags(text: str) -> list[str]:
     return [name for name, rule in _SCAM_RULES.items() if rule.search(text)]
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+
+def clean(s: str | None) -> str | None:
+    """Без управляющих символов и подмены направления текста; пустая строка → None."""
+    return _CONTROL.sub("", s or "").strip() or None
+
+
 # --- оплата -------------------------------------------------------------
 
 DEFAULT_SHIFT_HOURS = 8

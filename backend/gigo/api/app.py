@@ -5,10 +5,9 @@
 
 import logging
 import os
-import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 
@@ -19,8 +18,9 @@ from pydantic import BaseModel, Field
 
 from gigo import actions, config, db, events, rules
 from gigo.api.auth import InitDataError, TgUser, validate_init_data
-from gigo.api.limits import RateLimiter, check_recent
-from gigo.categories import CATEGORIES, PAY_UNITS, SCAM_FLAGS
+from gigo.actions import check_recent
+from gigo.api.limits import RateLimiter
+from gigo.categories import CATEGORIES, PAY_UNITS
 from gigo.geo import Geocoder
 from gigo.jobs_query import JobFilter, build_feed, jobs_where, rating_join, responses_where
 from gigo.migrate import migrate
@@ -29,8 +29,6 @@ log = logging.getLogger("gigo.api")
 
 CITY = {"id": "moscow", "name": "Москва", "lat": 55.7558, "lng": 37.6176}
 MAX_SUBSCRIPTIONS = 10
-MAX_OPEN_JOBS = 20
-MAX_DAYS_AHEAD = 60
 MAX_SAVED = 200
 MAX_SKILLS = len(CATEGORIES)
 STATIC_DIR = Path(os.getenv("STATIC_DIR", config.ROOT / "frontend" / "dist"))
@@ -392,91 +390,22 @@ class JobIn(BaseModel):
     lng: float | None = Field(default=None, ge=-180, le=180)
 
 
-_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+_clean = rules.clean
 
 
-def _clean(s: str | None) -> str | None:
-    """Без управляющих символов и подмены направления текста; пустая строка → None."""
-    return _CONTROL.sub("", s or "").strip() or None
-
-
-async def _job_fields(request: Request, body: JobIn, created: datetime | None = None) -> dict:
-    """Проверенные поля заявки для INSERT/UPDATE. created: когда создана (для срока жизни при правке)."""
-    p = pool(request)
-    if body.category not in CATEGORIES:
-        raise HTTPException(422, "Неизвестная категория")
-    if body.pay_unit not in PAY_UNITS:
-        raise HTTPException(422, "Неизвестная единица оплаты")
-    title, description, address = _clean(body.title), _clean(body.description), _clean(body.address)
-    if not title:
-        raise HTTPException(422, "Напишите, что нужно сделать")
-    if flags := rules.scam_flags(f"{title}\n{description or ''}"):
-        raise HTTPException(422, f"Заявку нельзя опубликовать: {SCAM_FLAGS[flags[0]]}. "
-                                 "Если это ошибка, переформулируйте текст.")
-    has_point = body.lat is not None and body.lng is not None
-    if not (body.metro_id or address or has_point):
-        raise HTTPException(422, "Укажите метро или адрес")
-
-    now = datetime.now(rules.MSK)
-    day = body.starts_on
-    at = time.fromisoformat(body.start_time.zfill(5)) if body.start_time else None
-    if at and not day:
-        day = now.date()
-    if day and not (now.date() <= day <= now.date() + timedelta(days=MAX_DAYS_AHEAD)):
-        raise HTTPException(422, f"Дата должна быть от сегодня до {MAX_DAYS_AHEAD} дней вперёд")
-    start = rules.starts_at(day, at)
-    if start and start < now - timedelta(minutes=30):
-        raise HTTPException(422, "Время начала уже прошло")
-
-    metro = None
-    if body.metro_id:
-        metro = await p.fetchrow("SELECT ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng "
-                                 "FROM metro_stations WHERE id = $1", body.metro_id)
-        if not metro:
-            raise HTTPException(422, "Неизвестная станция метро")
-    point = (body.lat, body.lng) if has_point else None
-    if not point and address:
-        point = await request.app.state.geocoder.locate(address)
-    if not point and metro:
-        point = (metro["lat"], metro["lng"])
-
-    per_hour, estimated = rules.pay_per_hour(body.pay_amount, body.pay_unit, body.duration_hours)
-    return {
-        "category": body.category, "title": title, "description": description,
-        "workers_needed": body.workers_needed, "pay_amount": body.pay_amount, "pay_unit": body.pay_unit,
-        "pay_per_hour": per_hour, "pay_estimated": estimated,
-        "pay_total": rules.pay_total(body.pay_amount, body.pay_unit, body.duration_hours),
-        "pay_timing": _clean(body.pay_timing), "starts_on": day, "starts_at": start,
-        "duration_hours": body.duration_hours, "metro_id": body.metro_id, "address": address,
-        "lat": point[0] if point else None, "lng": point[1] if point else None,
-        "expires_at": rules.expires_at(created or now, day, start),
-    }
-
-
-# Колонки заявки из _job_fields; lat/lng собираются в location.
-_JOB_COLUMNS = ("category", "title", "description", "workers_needed", "pay_amount", "pay_unit", "pay_per_hour",
-                "pay_estimated", "pay_total", "pay_timing", "starts_on", "starts_at", "duration_hours", "metro_id",
-                "address", "expires_at")
-_LOCATION_SQL = "CASE WHEN ${lat}::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography END"
+def _new_job(body: JobIn) -> actions.NewJob:
+    fields = body.model_dump()
+    start_time = fields.pop("start_time")
+    fields["start_time"] = time.fromisoformat(start_time.zfill(5)) if start_time else None
+    return actions.NewJob(**fields)
 
 
 @app.post("/api/jobs", status_code=201)
 async def create_job(request: Request, body: JobIn, user: User):
     require_role(user, "employer")
     p = pool(request)
-    if await p.fetchval("SELECT count(*) FROM jobs WHERE employer_id = $1 AND status = 'open' AND expires_at > now()",
-                        user.id) >= MAX_OPEN_JOBS:
-        raise HTTPException(409, f"Открыто уже {MAX_OPEN_JOBS} заявок. Закройте ненужные, чтобы создать новую.")
-    await check_recent(p, "SELECT count(*) FROM jobs WHERE employer_id = $1 AND created_at > now() - interval '1 hour'",
-                       user.id, 5, "Не больше 5 заявок в час. Попробуйте позже.")
-    fields = await _job_fields(request, body)
-    n = len(_JOB_COLUMNS)
-    location = _LOCATION_SQL.format(lat=n + 2, lng=n + 3)
-    job_id = await p.fetchval(
-        f"""INSERT INTO jobs (employer_id, {", ".join(_JOB_COLUMNS)}, location)
-            VALUES ($1, {", ".join(f"${i}" for i in range(2, n + 2))}, {location}) RETURNING id""",
-        user.id, *(fields[c] for c in _JOB_COLUMNS), fields["lat"], fields["lng"],
-    )
+    async with p.acquire() as conn:
+        job_id = await actions.create_job(conn, request.app.state.geocoder, user.id, _new_job(body))
     return await load_job(p, user, job_id)
 
 
@@ -491,20 +420,21 @@ async def edit_job(request: Request, job_id: int, body: JobIn, user: User):
         raise HTTPException(409, "Заявку скрыл модератор, изменить её нельзя.")
     if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc):
         raise HTTPException(409, "Изменить можно только открытую заявку. Для новой даты нажмите «Повторить».")
-    fields = await _job_fields(request, body, job["created_at"])
+    async with p.acquire() as conn:
+        fields = await actions.job_fields(conn, request.app.state.geocoder, _new_job(body), job["created_at"])
     if fields["expires_at"] <= datetime.now(timezone.utc):
         # Заявка без даты старше трёх дней: правка не продлевает её бесконечно.
         raise HTTPException(409, "Срок заявки прошёл. Создайте новую.")
     if fields["workers_needed"] < (accepted := await p.fetchval(
             "SELECT count(*) FROM responses WHERE job_id = $1 AND status = 'accepted'", job_id)):
         raise HTTPException(422, f"Вы уже выбрали {accepted} исполнителей: меньше указать нельзя.")
-    n = len(_JOB_COLUMNS)
-    sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(_JOB_COLUMNS, start=2))
-    location = _LOCATION_SQL.format(lat=n + 2, lng=n + 3)
+    n = len(actions.JOB_COLUMNS)
+    sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(actions.JOB_COLUMNS, start=2))
+    location = actions.LOCATION_SQL.format(lat=n + 2, lng=n + 3)
     async with p.acquire() as conn, conn.transaction():
         await conn.execute(
             f"UPDATE jobs SET {sets}, location = {location}, updated_at = now() WHERE id = $1",
-            job_id, *(fields[c] for c in _JOB_COLUMNS), fields["lat"], fields["lng"],
+            job_id, *(fields[c] for c in actions.JOB_COLUMNS), fields["lat"], fields["lng"],
         )
         for r in await conn.fetch("SELECT worker_id FROM responses WHERE job_id = $1 "
                                   "AND status IN ('pending', 'accepted')", job_id):
@@ -534,30 +464,8 @@ class ResponseIn(BaseModel):
 async def respond(request: Request, job_id: int, body: ResponseIn, user: User):
     require_role(user, "worker")
     p = pool(request)
-    message = _clean(body.message)
     async with p.acquire() as conn, conn.transaction():
-        job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
-        if not job:
-            raise HTTPException(404, "Заявка не найдена")
-        if job["employer_id"] == user.id:
-            raise HTTPException(409, "Это ваша заявка")
-        if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc) or job["hidden_at"]:
-            raise HTTPException(409, "Набор на эту заявку закрыт")
-        await check_recent(conn, "SELECT count(*) FROM responses WHERE worker_id = $1 "
-                                 "AND updated_at > now() - interval '1 hour'",
-                           user.id, 30, "Слишком много откликов за час. Попробуйте позже.")
-        resp_id = await conn.fetchval(
-            """INSERT INTO responses (job_id, worker_id, message) VALUES ($1, $2, $3)
-               ON CONFLICT (job_id, worker_id) DO UPDATE
-                   SET status = 'pending', message = EXCLUDED.message, updated_at = now()
-                   WHERE responses.status = 'withdrawn'
-               RETURNING id""",
-            job_id, user.id, message,
-        )
-        if not resp_id:
-            raise HTTPException(409, "Вы уже откликнулись")
-        worker = await conn.fetchrow("SELECT tg_id, first_name, username FROM users WHERE tg_id = $1", user.id)
-        await events.new_response(conn, job, worker, message, resp_id)
+        resp_id = await actions.respond(conn, job_id, user.id, body.message)
     [resp] = await fetch_responses(p, user.id, "r.id = $2", resp_id)
     return resp
 
@@ -642,22 +550,8 @@ class ReviewIn(BaseModel):
 
 @app.post("/api/reviews", status_code=201)
 async def create_review(request: Request, body: ReviewIn, user: User):
-    p = pool(request)
-    r = await p.fetchrow(
-        "SELECT r.job_id, r.worker_id, r.status, j.employer_id FROM responses r JOIN jobs j ON j.id = r.job_id "
-        "WHERE r.id = $1", body.response_id)
-    if not r or user.id not in (r["worker_id"], r["employer_id"]):
-        raise HTTPException(404, "Отклик не найден")
-    if r["status"] != "accepted":
-        raise HTTPException(409, "Отзыв можно оставить только после того, как отклик принят")
-    target = r["worker_id"] if user.id == r["employer_id"] else r["employer_id"]
-    text = _clean(body.text)
-    await p.execute(
-        """INSERT INTO reviews (job_id, author_id, target_id, rating, text) VALUES ($1, $2, $3, $4, $5)
-           ON CONFLICT (job_id, author_id, target_id) DO UPDATE
-               SET rating = EXCLUDED.rating, text = EXCLUDED.text, created_at = now()""",
-        r["job_id"], user.id, target, body.rating, text,
-    )
+    async with pool(request).acquire() as conn:
+        text = await actions.save_review(conn, body.response_id, user.id, body.rating, body.text)
     return {"rating": body.rating, "text": text}
 
 

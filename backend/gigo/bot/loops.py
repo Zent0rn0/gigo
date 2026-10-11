@@ -94,7 +94,9 @@ async def notify_once(bot: Bot, pool, settings: config.Settings, since: datetime
         if not claimed:
             continue
         ok = await _send(bot, pool, r["user_id"], job_message(r, r["metro_name"], r["subscription_name"]),
-                         app_button(settings, "Подробнее и откликнуться", f"?job={r['id']}"))
+                         keyboard(settings, [[{"text": "🙋 Откликнуться", "data": f"ap:{r['id']}"},
+                                              {"text": "📄 Подробнее", "data": f"job:{r['id']}"}],
+                                             [{"text": "Открыть в приложении", "path": f"?job={r['id']}"}]]))
         if ok is None:
             await pool.execute("DELETE FROM notifications WHERE user_id = $1 AND job_id = $2", r["user_id"], r["id"])
         sent += bool(ok)
@@ -162,10 +164,10 @@ async def remind_once(pool) -> int:
         for r in await conn.fetch(REVIEW_SQL + " FOR UPDATE OF r SKIP LOCKED"):
             job = {"id": r["job_id"], "title": r["title"]}
             if not r["worker_reviewed"]:
-                await events.ask_review(conn, r["worker_id"], job, r["employer_name"])
+                await events.ask_review(conn, r["worker_id"], job, r["employer_name"], r["id"])
                 n += 1
             if not r["employer_reviewed"]:
-                await events.ask_review(conn, r["employer_id"], job, r["worker_name"])
+                await events.ask_review(conn, r["employer_id"], job, r["worker_name"], r["id"])
                 n += 1
             await conn.execute("UPDATE responses SET review_asked_at = now() WHERE id = $1", r["id"])
     return n
