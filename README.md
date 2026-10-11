@@ -62,10 +62,11 @@ cd ../frontend && npm install && npm run dev            # http://localhost:5173
 
 ## Альфа-версия в Telegram бесплатно
 
-Без сервера и домена: приложение работает с вашего компьютера, а HTTPS-адрес даёт бесплатный Cloudflare Tunnel.
+Без сервера и домена: приложение работает с вашего компьютера, а HTTPS-адрес даёт бесплатный туннель:
+Cloudflare Tunnel, а если он не пробивается (бывает в РФ и за VPN), localhost.run через обычный ssh.
 
 ```bash
-brew install cloudflared   # один раз
+brew install cloudflared   # один раз, желательно; без него сразу используется localhost.run
 ./scripts/alpha.sh
 ```
 

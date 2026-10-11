@@ -4,10 +4,11 @@
 #   ./scripts/alpha.sh
 #
 # Собирает Mini App, запускает API и бота и открывает временный HTTPS-адрес через Cloudflare Tunnel
-# (бесплатно, без регистрации). Адрес меняется при каждом запуске, бот сам ставит новый в кнопку меню.
+# или localhost.run через ssh (оба бесплатны, без регистрации). Адрес меняется при каждом запуске,
+# бот сам ставит новый в кнопку меню.
 # Пока скрипт работает и компьютер не спит, приложение доступно в Telegram. Остановить: Ctrl+C.
 #
-# Нужно один раз: Docker Desktop, backend/.venv (см. README), Node 22 и cloudflared (brew install cloudflared).
+# Нужно один раз: Docker Desktop, backend/.venv (см. README), Node 22; cloudflared желателен, но не обязателен.
 # В .env должны быть BOT_TOKEN и, по желанию, VITE_YANDEX_MAPS_KEY, YANDEX_GEOCODER_KEY, ADMIN_IDS.
 
 set -euo pipefail
@@ -20,7 +21,6 @@ PORT="${PORT:-8000}"
 say() { printf '\n\033[1m%s\033[0m\n' "$*"; }
 die() { printf '\n\033[31m%s\033[0m\n' "$*" >&2; exit 1; }
 
-command -v cloudflared >/dev/null || die "Нет cloudflared. Установите: brew install cloudflared"
 command -v docker >/dev/null || die "Нет docker в PATH. Запустите Docker Desktop."
 command -v npm >/dev/null || die "Нет Node.js (npm). Установите Node 22."
 [ -x backend/.venv/bin/python ] || die "Нет backend/.venv. Создайте по README: python -m venv .venv && pip install -r requirements.txt"
@@ -30,7 +30,7 @@ grep -Eq '^BOT_TOKEN=.+' .env || die "В .env не задан BOT_TOKEN."
 PIDS=()
 cleanup() {
   say "Останавливаю…"
-  for pid in "${PIDS[@]}"; do kill "$pid" 2>/dev/null || true; done
+  for pid in "${PIDS[@]}" ${TUNNEL_PID:-}; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -65,20 +65,60 @@ done
 curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null || die "API не запустился, подробности: $LOGS/api.log"
 
 say "4/5 Туннель"
-cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" > "$LOGS/tunnel.log" 2>&1 &
-PIDS+=($!)
+# Сначала Cloudflare (cloudflared), если его нет или он не пробился, то localhost.run через обычный ssh.
+# Выбрать вручную: TUNNEL=cloudflare или TUNNEL=ssh.
 URL=""
-for _ in $(seq 1 60); do
-  URL="$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOGS/tunnel.log" | head -1 || true)"
-  [ -n "$URL" ] && break
-  sleep 1
-done
-[ -n "$URL" ] || die "Туннель не поднялся, подробности: $LOGS/tunnel.log"
-# Ждём, пока адрес начнёт отвечать снаружи.
-for _ in $(seq 1 30); do
-  curl -fs "$URL/api/health" >/dev/null 2>&1 && break
-  sleep 2
-done
+TUNNEL_PID=""
+
+wait_url() {  # $1: шаблон адреса в логе
+  URL=""
+  for _ in $(seq 1 45); do
+    URL="$(grep -Eo "$1" "$LOGS/tunnel.log" | head -1 || true)"
+    [ -n "$URL" ] && return 0
+    kill -0 "$TUNNEL_PID" 2>/dev/null || return 1
+    sleep 1
+  done
+  return 1
+}
+
+reachable() {  # адрес отвечает снаружи
+  for _ in $(seq 1 20); do
+    curl -fs --max-time 5 "$URL/api/health" >/dev/null 2>&1 && return 0
+    sleep 2
+  done
+  return 1
+}
+
+stop_tunnel() { [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true; TUNNEL_PID=""; }
+
+try_cloudflare() {
+  command -v cloudflared >/dev/null || { echo "cloudflared не установлен"; return 1; }
+  # http2 вместо QUIC: UDP часто режут провайдеры и VPN.
+  TUNNEL_TRANSPORT_PROTOCOL="${TUNNEL_TRANSPORT_PROTOCOL:-http2}" \
+    cloudflared tunnel --no-autoupdate --url "http://127.0.0.1:$PORT" > "$LOGS/tunnel.log" 2>&1 &
+  TUNNEL_PID=$!
+  wait_url 'https://[a-z0-9-]+\.trycloudflare\.com' && reachable && return 0
+  echo "Cloudflare не отвечает (подробности в tunnel.log)"
+  stop_tunnel
+  return 1
+}
+
+try_ssh() {
+  ssh -o StrictHostKeyChecking=accept-new -o ServerAliveInterval=30 -o ExitOnForwardFailure=yes -T \
+    -R "80:127.0.0.1:$PORT" nokey@localhost.run > "$LOGS/tunnel.log" 2>&1 < /dev/null &
+  TUNNEL_PID=$!
+  wait_url 'https://[a-z0-9-]+\.lhr\.life' && reachable && return 0
+  echo "localhost.run не отвечает (подробности в tunnel.log)"
+  stop_tunnel
+  return 1
+}
+
+case "${TUNNEL:-auto}" in
+  cloudflare) try_cloudflare ;;
+  ssh) try_ssh ;;
+  *) try_cloudflare || try_ssh ;;
+esac || die "Ни один туннель не поднялся. Чаще всего мешает VPN или провайдер: включите в VPN режим «весь трафик» и запустите снова."
+PIDS+=("$TUNNEL_PID")
 
 say "5/5 Бот"
 ( cd backend && DEV_AUTH=0 WEBAPP_URL="$URL" exec .venv/bin/python -m gigo.bot ) > "$LOGS/bot.log" 2>&1 &
