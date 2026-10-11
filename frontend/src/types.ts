@@ -51,6 +51,8 @@ export interface Me {
   first_name: string;
   role: Role | null;
   about: string | null;
+  /** Что умеет исполнитель: id категорий. */
+  skills: string[];
   rating: number | null;
   reviews_count: number;
 }
@@ -58,6 +60,7 @@ export interface Me {
 export interface MePatch {
   role?: Role;
   about?: string;
+  skills?: string[];
 }
 
 /** Короткая карточка второй стороны (заказчик в Job, исполнитель в Response). */
@@ -65,6 +68,8 @@ export interface UserStub {
   id: number;
   first_name: string;
   about?: string | null;
+  /** У исполнителя в отклике. */
+  skills?: string[];
   rating: number | null;
   reviews_count: number;
 }
@@ -128,6 +133,8 @@ export interface Job {
   responses_count: number;
   accepted_count: number;
   is_mine: boolean;
+  /** Смотрящий сохранил заявку в избранное. */
+  is_saved?: boolean;
   my_response: JobResponse | null;
   created_at: string;
   expires_at: string;
@@ -170,6 +177,8 @@ export interface JobsQuery {
   radius_km?: number | null;
   sort?: JobSort;
   with_location?: boolean;
+  /** Поиск по словам: название, описание, адрес, метро, категория. */
+  q?: string;
   limit?: number;
   offset?: number;
 }
@@ -187,6 +196,7 @@ export interface UserProfile {
   first_name: string;
   role: Role | null;
   about: string | null;
+  skills: string[];
   rating: number | null;
   reviews_count: number;
   jobs_count: number;

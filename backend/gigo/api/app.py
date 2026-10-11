@@ -31,6 +31,8 @@ CITY = {"id": "moscow", "name": "Москва", "lat": 55.7558, "lng": 37.6176}
 MAX_SUBSCRIPTIONS = 10
 MAX_OPEN_JOBS = 20
 MAX_DAYS_AHEAD = 60
+MAX_SAVED = 200
+MAX_SKILLS = len(CATEGORIES)
 STATIC_DIR = Path(os.getenv("STATIC_DIR", config.ROOT / "frontend" / "dist"))
 
 
@@ -151,14 +153,15 @@ async def health(request: Request):
 # --- профиль ------------------------------------------------------------
 
 ME_SQL = f"""
-SELECT u.tg_id, u.username, u.first_name, u.role, u.about, ur.rating, ur.reviews_count
+SELECT u.tg_id, u.username, u.first_name, u.role, u.about, u.skills, ur.rating, ur.reviews_count
 FROM users u {rating_join("ur", "u.tg_id")} WHERE u.tg_id = $1
 """
 
 
 def me_out(r) -> dict:
     return {"id": r["tg_id"], "username": r["username"], "first_name": r["first_name"], "role": r["role"],
-            "about": r["about"], "rating": _num(r["rating"]), "reviews_count": r["reviews_count"]}
+            "about": r["about"], "skills": list(r["skills"]), "rating": _num(r["rating"]),
+            "reviews_count": r["reviews_count"]}
 
 
 @app.get("/api/me")
@@ -169,6 +172,12 @@ async def get_me(request: Request, user: User):
 class MeIn(BaseModel):
     role: Literal["employer", "worker"] | None = None
     about: str | None = Field(default=None, max_length=500)
+    skills: list[str] | None = Field(default=None, max_length=MAX_SKILLS)
+
+
+def _skills(ids: list[str]) -> list[str]:
+    """Только известные категории, без повторов, в порядке справочника."""
+    return [k for k in CATEGORIES if k in ids]
 
 
 @app.patch("/api/me")
@@ -178,6 +187,8 @@ async def patch_me(request: Request, body: MeIn, user: User):
         raise HTTPException(422, "Выберите роль")
     if "about" in fields:
         fields["about"] = _clean(fields["about"])
+    if "skills" in fields:
+        fields["skills"] = _skills(fields["skills"] or [])
     if fields:
         sets = ", ".join(f"{k} = ${i}" for i, k in enumerate(fields, start=2))
         await pool(request).execute(f"UPDATE users SET {sets} WHERE tg_id = $1", user.id, *fields.values())
@@ -204,7 +215,7 @@ async def get_user(request: Request, user_id: int, _: User):
     )
     return {
         "id": r["tg_id"], "first_name": r["first_name"], "role": r["role"], "about": r["about"],
-        "rating": _num(r["rating"]), "reviews_count": r["reviews_count"], "jobs_count": jobs_count,
+        "skills": list(r["skills"]), "rating": _num(r["rating"]), "reviews_count": r["reviews_count"], "jobs_count": jobs_count,
         "reviews": [{"rating": v["rating"], "text": v["text"], "job_title": v["job_title"],
                      "author": {"id": v["author_id"], "first_name": v["author_name"]},
                      "created_at": _ts(v["created_at"])} for v in reviews],
@@ -246,6 +257,7 @@ def response_out(r, viewer_id: int) -> dict:
         "message": r["message"],
         "created_at": _ts(r["created_at"]),
         "worker": {"id": r["worker_id"], "first_name": r["worker_name"], "about": r["worker_about"],
+                   "skills": list(r["worker_skills"]),
                    "rating": _num(r["worker_rating"]), "reviews_count": r["worker_reviews"]},
         "contact": contact,
         "my_review": {"rating": r["my_rating"], "text": r["my_text"]} if r["my_rating"] is not None else None,
@@ -287,6 +299,7 @@ def job_out(r, my_response: dict | None = None) -> dict:
         "responses_count": r["responses_count"],
         "accepted_count": r["accepted_count"],
         "is_mine": r["is_mine"],
+        "is_saved": r["is_saved"],
         "my_response": my_response,
         "created_at": _ts(r["created_at"]),
         "expires_at": _ts(r["expires_at"]),
@@ -336,8 +349,10 @@ async def list_jobs(
     with_location: bool = False,
     limit: Annotated[int, Query(ge=1, le=500)] = 30,
     offset: Annotated[int, Query(ge=0)] = 0,
+    q: Annotated[str | None, Query(max_length=100)] = None,
 ):
-    f = JobFilter(category, pay_min, metro, today, lat, lng, radius_km, with_location, sort, limit, offset)
+    f = JobFilter(category, pay_min, metro, today, lat, lng, radius_km, with_location, sort, limit, offset,
+                  _clean(q))
     list_sql, count_sql, params = build_feed(f, user.id)
     p = pool(request)
     rows = await p.fetch(list_sql, *params)
@@ -385,9 +400,8 @@ def _clean(s: str | None) -> str | None:
     return _CONTROL.sub("", s or "").strip() or None
 
 
-@app.post("/api/jobs", status_code=201)
-async def create_job(request: Request, body: JobIn, user: User):
-    require_role(user, "employer")
+async def _job_fields(request: Request, body: JobIn, created: datetime | None = None) -> dict:
+    """Проверенные поля заявки для INSERT/UPDATE. created: когда создана (для срока жизни при правке)."""
     p = pool(request)
     if body.category not in CATEGORIES:
         raise HTTPException(422, "Неизвестная категория")
@@ -402,11 +416,6 @@ async def create_job(request: Request, body: JobIn, user: User):
     has_point = body.lat is not None and body.lng is not None
     if not (body.metro_id or address or has_point):
         raise HTTPException(422, "Укажите метро или адрес")
-    if await p.fetchval("SELECT count(*) FROM jobs WHERE employer_id = $1 AND status = 'open' AND expires_at > now()",
-                        user.id) >= MAX_OPEN_JOBS:
-        raise HTTPException(409, f"Открыто уже {MAX_OPEN_JOBS} заявок. Закройте ненужные, чтобы создать новую.")
-    await check_recent(p, "SELECT count(*) FROM jobs WHERE employer_id = $1 AND created_at > now() - interval '1 hour'",
-                       user.id, 5, "Не больше 5 заявок в час. Попробуйте позже.")
 
     now = datetime.now(rules.MSK)
     day = body.starts_on
@@ -432,20 +441,74 @@ async def create_job(request: Request, body: JobIn, user: User):
         point = (metro["lat"], metro["lng"])
 
     per_hour, estimated = rules.pay_per_hour(body.pay_amount, body.pay_unit, body.duration_hours)
+    return {
+        "category": body.category, "title": title, "description": description,
+        "workers_needed": body.workers_needed, "pay_amount": body.pay_amount, "pay_unit": body.pay_unit,
+        "pay_per_hour": per_hour, "pay_estimated": estimated,
+        "pay_total": rules.pay_total(body.pay_amount, body.pay_unit, body.duration_hours),
+        "pay_timing": _clean(body.pay_timing), "starts_on": day, "starts_at": start,
+        "duration_hours": body.duration_hours, "metro_id": body.metro_id, "address": address,
+        "lat": point[0] if point else None, "lng": point[1] if point else None,
+        "expires_at": rules.expires_at(created or now, day, start),
+    }
+
+
+# Колонки заявки из _job_fields; lat/lng собираются в location.
+_JOB_COLUMNS = ("category", "title", "description", "workers_needed", "pay_amount", "pay_unit", "pay_per_hour",
+                "pay_estimated", "pay_total", "pay_timing", "starts_on", "starts_at", "duration_hours", "metro_id",
+                "address", "expires_at")
+_LOCATION_SQL = "CASE WHEN ${lat}::float8 IS NULL THEN NULL ELSE ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography END"
+
+
+@app.post("/api/jobs", status_code=201)
+async def create_job(request: Request, body: JobIn, user: User):
+    require_role(user, "employer")
+    p = pool(request)
+    if await p.fetchval("SELECT count(*) FROM jobs WHERE employer_id = $1 AND status = 'open' AND expires_at > now()",
+                        user.id) >= MAX_OPEN_JOBS:
+        raise HTTPException(409, f"Открыто уже {MAX_OPEN_JOBS} заявок. Закройте ненужные, чтобы создать новую.")
+    await check_recent(p, "SELECT count(*) FROM jobs WHERE employer_id = $1 AND created_at > now() - interval '1 hour'",
+                       user.id, 5, "Не больше 5 заявок в час. Попробуйте позже.")
+    fields = await _job_fields(request, body)
+    n = len(_JOB_COLUMNS)
+    location = _LOCATION_SQL.format(lat=n + 2, lng=n + 3)
     job_id = await p.fetchval(
-        """INSERT INTO jobs (employer_id, category, title, description, workers_needed, pay_amount, pay_unit,
-                             pay_per_hour, pay_estimated, pay_total, pay_timing, starts_on, starts_at, duration_hours,
-                             metro_id, address, location, expires_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
-                   CASE WHEN $17::float8 IS NULL THEN NULL
-                        ELSE ST_SetSRID(ST_MakePoint($18, $17), 4326)::geography END, $19)
-           RETURNING id""",
-        user.id, body.category, title, description, body.workers_needed, body.pay_amount, body.pay_unit,
-        per_hour, estimated, rules.pay_total(body.pay_amount, body.pay_unit, body.duration_hours),
-        _clean(body.pay_timing), day, start, body.duration_hours, body.metro_id, address,
-        point[0] if point else None, point[1] if point else None,
-        rules.expires_at(now, day, start),
+        f"""INSERT INTO jobs (employer_id, {", ".join(_JOB_COLUMNS)}, location)
+            VALUES ($1, {", ".join(f"${i}" for i in range(2, n + 2))}, {location}) RETURNING id""",
+        user.id, *(fields[c] for c in _JOB_COLUMNS), fields["lat"], fields["lng"],
     )
+    return await load_job(p, user, job_id)
+
+
+@app.put("/api/jobs/{job_id}")
+async def edit_job(request: Request, job_id: int, body: JobIn, user: User):
+    """Правка открытой заявки автором. Откликнувшимся приходит сообщение, что условия изменились."""
+    p = pool(request)
+    job = await p.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
+    if not job or job["employer_id"] != user.id:
+        raise HTTPException(404, "Заявка не найдена")
+    if job["hidden_at"]:
+        raise HTTPException(409, "Заявку скрыл модератор, изменить её нельзя.")
+    if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc):
+        raise HTTPException(409, "Изменить можно только открытую заявку. Для новой даты нажмите «Повторить».")
+    fields = await _job_fields(request, body, job["created_at"])
+    if fields["expires_at"] <= datetime.now(timezone.utc):
+        # Заявка без даты старше трёх дней: правка не продлевает её бесконечно.
+        raise HTTPException(409, "Срок заявки прошёл. Создайте новую.")
+    if fields["workers_needed"] < (accepted := await p.fetchval(
+            "SELECT count(*) FROM responses WHERE job_id = $1 AND status = 'accepted'", job_id)):
+        raise HTTPException(422, f"Вы уже выбрали {accepted} исполнителей: меньше указать нельзя.")
+    n = len(_JOB_COLUMNS)
+    sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(_JOB_COLUMNS, start=2))
+    location = _LOCATION_SQL.format(lat=n + 2, lng=n + 3)
+    async with p.acquire() as conn, conn.transaction():
+        await conn.execute(
+            f"UPDATE jobs SET {sets}, location = {location}, updated_at = now() WHERE id = $1",
+            job_id, *(fields[c] for c in _JOB_COLUMNS), fields["lat"], fields["lng"],
+        )
+        for r in await conn.fetch("SELECT worker_id FROM responses WHERE job_id = $1 "
+                                  "AND status IN ('pending', 'accepted')", job_id):
+            await events.job_edited(conn, {**dict(job), "title": fields["title"]}, r["worker_id"])
     return await load_job(p, user, job_id)
 
 
@@ -519,6 +582,35 @@ async def my_responses(request: Request, user: User):
     rows = await p.fetch(jobs_where("j.id = ANY($2::bigint[])"), user.id, list({r["job_id"] for r in responses}))
     jobs = {r["id"]: job_out(r) for r in rows}
     return {"items": [{**resp, "job": jobs[resp["job_id"]]} for resp in responses]}
+
+
+# --- избранное ---------------------------------------------------------------
+
+@app.get("/api/my/saved")
+async def saved_jobs(request: Request, user: User):
+    """Сохранённые заявки, недавно сохранённые сверху. Скрытые модератором не показываем."""
+    p = pool(request)
+    rows = await p.fetch(
+        jobs_where("j.id IN (SELECT job_id FROM saved_jobs WHERE user_id = $1) AND j.hidden_at IS NULL",
+                   "(SELECT created_at FROM saved_jobs s WHERE s.job_id = j.id AND s.user_id = $1) DESC"),
+        user.id)
+    return {"items": await jobs_with_my_responses(p, user, rows)}
+
+
+@app.put("/api/jobs/{job_id}/save", status_code=204)
+async def save_job(request: Request, job_id: int, user: User):
+    p = pool(request)
+    await load_job(p, user, job_id)  # 404, если заявку не видно
+    if await p.fetchval("SELECT count(*) FROM saved_jobs WHERE user_id = $1", user.id) >= MAX_SAVED:
+        raise HTTPException(409, f"В избранном уже {MAX_SAVED} заявок. Уберите старые.")
+    await p.execute("INSERT INTO saved_jobs (user_id, job_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", user.id, job_id)
+    return Response(status_code=204)
+
+
+@app.delete("/api/jobs/{job_id}/save", status_code=204)
+async def unsave_job(request: Request, job_id: int, user: User):
+    await pool(request).execute("DELETE FROM saved_jobs WHERE user_id = $1 AND job_id = $2", user.id, job_id)
+    return Response(status_code=204)
 
 
 # --- жалобы ---------------------------------------------------------------

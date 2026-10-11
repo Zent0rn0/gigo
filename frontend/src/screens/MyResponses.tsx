@@ -6,6 +6,8 @@ import { ReviewSheet, type ReviewTarget } from '../components/ReviewSheet';
 import { EmptyState, ErrorState } from '../components/States';
 import { ContactButton, StatusChip } from '../components/ui';
 import { RESPONSE_LABEL_WORKER, RESPONSE_TONE } from '../format';
+import { jobState } from '../format';
+import { haptic } from '../telegram';
 import type { Job, Meta, MyResponse } from '../types';
 
 interface Props {
@@ -25,6 +27,34 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [review, setReview] = useState<ReviewTarget | null>(null);
+  const [view, setView] = useState<'responses' | 'saved'>('responses');
+  const [saved, setSaved] = useState<Job[] | null>(null);
+  const [savedError, setSavedError] = useState('');
+
+  useEffect(() => {
+    if (!active || view !== 'saved') return;
+    let alive = true;
+    setSavedError('');
+    api
+      .savedJobs()
+      .then((list) => alive && setSaved(list))
+      .catch((e) => alive && setSavedError(errorText(e)));
+    return () => {
+      alive = false;
+    };
+  }, [active, view, version, attempt]);
+
+  const unsave = async (job: Job) => {
+    setSaved((l) => l?.filter((j) => j.id !== job.id) ?? l);
+    try {
+      await api.setSaved(job.id, false);
+      haptic('light');
+      onChanged();
+    } catch (e) {
+      setSaved((l) => (l ? [job, ...l] : l));
+      toast(errorText(e));
+    }
+  };
 
   useEffect(() => {
     if (!active) return;
@@ -67,17 +97,84 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
               : 'Ответ заказчика придёт сообщением от бота.'
             : 'Здесь заявки, на которые вы откликнулись.'}
         </p>
+        <div className="segmented segmented--tabs" role="tablist" aria-label="Что показать">
+          {(
+            [
+              ['responses', 'Отклики', 'inbox'],
+              ['saved', 'Избранное', 'bookmark'],
+            ] as const
+          ).map(([id, label, icon]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={view === id}
+              className={`segmented__item${view === id ? ' segmented__item--on' : ''}`}
+              onClick={() => {
+                haptic('select');
+                setView(id);
+              }}
+            >
+              <Icon name={icon} size={17} />
+              {label}
+              {id === 'saved' && saved?.length ? <span className="segmented__count">{saved.length}</span> : null}
+            </button>
+          ))}
+        </div>
       </header>
 
-      {status === 'loading' && (
+      {view === 'saved' && (
+        <>
+          {savedError && <ErrorState text={savedError} onRetry={() => setAttempt((a) => a + 1)} />}
+          {!savedError && saved == null && (
+            <div className="list">
+              <JobCardSkeleton />
+            </div>
+          )}
+          {!savedError && saved?.length === 0 && (
+            <EmptyState
+              icon="bookmark"
+              title="В избранном пусто"
+              text="Откройте заявку и нажмите закладку вверху, чтобы вернуться к ней позже."
+              action={
+                <button type="button" className="btn btn--secondary" onClick={onGoFeed}>
+                  <Icon name="feed" size={18} />
+                  Открыть ленту
+                </button>
+              }
+            />
+          )}
+          {!savedError && !!saved?.length && (
+            <div className="list">
+              {saved.map((j) => {
+                const open = jobState(j) === 'open';
+                return (
+                  <div key={j.id} className={open ? undefined : 'dim'}>
+                    <JobCard job={j} category={catById.get(j.category)} onOpen={onOpenJob} />
+                    <div className="card-actions">
+                      {!open && <span className="hint small">Набор закрыт</span>}
+                      <button type="button" className="btn btn--sm btn--secondary" onClick={() => unsave(j)}>
+                        <Icon name="x" size={16} />
+                        Убрать
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {view === 'responses' && status === 'loading' && (
         <div className="list">
           <JobCardSkeleton />
           <JobCardSkeleton />
         </div>
       )}
-      {status === 'error' && <ErrorState text={error} onRetry={() => setAttempt((a) => a + 1)} />}
+      {view === 'responses' && status === 'error' && <ErrorState text={error} onRetry={() => setAttempt((a) => a + 1)} />}
 
-      {status === 'ready' && items.length === 0 && (
+      {view === 'responses' && status === 'ready' && items.length === 0 && (
         <EmptyState
           icon="inbox"
           tone="brand"
@@ -92,7 +189,7 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
         />
       )}
 
-      {status === 'ready' && items.length > 0 && (
+      {view === 'responses' && status === 'ready' && items.length > 0 && (
         <div className="list">
           {sorted.map((r) => (
             <div

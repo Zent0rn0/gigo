@@ -92,7 +92,7 @@ async def test_auth_required(client):
 
 async def test_onboarding_and_roles(client):
     me = (await client.get("/api/me")).json()
-    assert me == {"id": WORKER, "username": "ivan", "first_name": "Иван", "role": None, "about": None,
+    assert me == {"id": WORKER, "username": "ivan", "first_name": "Иван", "role": None, "about": None, "skills": [],
                   "rating": None, "reviews_count": 0}
     assert (await client.patch("/api/me", json={"role": "boss"})).status_code == 422
     me = (await client.patch("/api/me", json={"role": "worker", "about": "  Опыт на складе  "})).json()

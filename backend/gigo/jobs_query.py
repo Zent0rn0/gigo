@@ -2,6 +2,8 @@
 
 from dataclasses import dataclass, field
 
+from gigo.categories import CATEGORIES
+
 
 def rating_join(alias: str, user_col: str) -> str:
     """LATERAL с рейтингом пользователя: {alias}.rating, {alias}.reviews_count."""
@@ -30,7 +32,8 @@ def job_columns(viewer: str) -> str:
         AS responses_count,
     (SELECT count(*) FILTER (WHERE r.status = 'accepted') FROM responses r WHERE r.job_id = j.id) AS accepted_count,
     (SELECT count(*) FILTER (WHERE r.status = 'pending') FROM responses r WHERE r.job_id = j.id) AS pending_count,
-    j.employer_id = {viewer} AS is_mine
+    j.employer_id = {viewer} AS is_mine,
+    EXISTS (SELECT 1 FROM saved_jobs s WHERE s.job_id = j.id AND s.user_id = {viewer}) AS is_saved
     """
 
 
@@ -47,6 +50,25 @@ class JobFilter:
     sort: str = "fresh"
     limit: int = 30
     offset: int = 0
+    q: str | None = None
+
+
+def _like(text: str) -> str:
+    """Шаблон ILIKE «содержит» с экранированными % и _."""
+    return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+def search_condition(q: str, p) -> str | None:
+    """Поиск по словам: каждое слово есть в названии, описании, адресе, метро или названии категории."""
+    parts = []
+    for word in q.lower().split()[:5]:
+        cats = [k for k, (label, _) in CATEGORIES.items() if word in label.lower()]
+        ph = p(_like(word))
+        cond = f"(j.title ILIKE {ph} OR j.description ILIKE {ph} OR j.address ILIKE {ph} OR m.name ILIKE {ph}"
+        if cats:
+            cond += f" OR j.category = ANY({p(cats)}::text[])"
+        parts.append(cond + ")")
+    return " AND ".join(parts) or None
 
 
 def build_feed(f: JobFilter, viewer_id: int) -> tuple[str, str, list]:
@@ -70,6 +92,8 @@ def build_feed(f: JobFilter, viewer_id: int) -> tuple[str, str, list]:
                      "OR (j.starts_on IS NULL AND j.created_at > now() - interval '12 hours'))")
     if f.with_location:
         where.append("j.location IS NOT NULL")
+    if f.q and (cond := search_condition(f.q, p)):
+        where.append(cond)
 
     distance = "NULL::float8"
     has_point = f.lat is not None and f.lng is not None
@@ -102,7 +126,7 @@ def responses_where(where: str, order: str = "r.created_at DESC") -> str:
     """Отклики по условию; $1: id смотрящего (для контакта и его отзыва), дальше параметры условия."""
     return f"""
     SELECT r.id, r.job_id, r.status, r.message, r.created_at, r.worker_id, j.employer_id,
-           w.first_name AS worker_name, w.username AS worker_username, w.about AS worker_about,
+           w.first_name AS worker_name, w.username AS worker_username, w.about AS worker_about, w.skills AS worker_skills,
            wr.rating AS worker_rating, wr.reviews_count AS worker_reviews,
            e.first_name AS employer_name, e.username AS employer_username,
            rv.rating AS my_rating, rv.text AS my_text

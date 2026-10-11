@@ -86,6 +86,7 @@ export interface UserRec {
   username: string | null;
   role: Role | null;
   about: string | null;
+  skills?: string[];
   /** Работ, сделанных до начала «истории» мока (для jobs_count исполнителя). */
   done_before: number;
 }
@@ -99,8 +100,8 @@ export const users: UserRec[] = [
   { id: 900000002, first_name: 'Сергей', username: null, role: 'employer', about: 'Склад на Рязанке.', done_before: 0 },
   { id: 900000003, first_name: 'Марина', username: 'marina_cafe', role: 'employer', about: 'Кафе у Белорусской.', done_before: 0 },
   { id: 900000004, first_name: 'Дмитрий', username: 'dima_build', role: 'employer', about: null, done_before: 0 },
-  { id: 777, first_name: 'Иван', username: 'ivan_work', role: 'worker', about: 'Опыт на складе 2 года, есть права B.', done_before: 6 },
-  { id: 778, first_name: 'Мария', username: 'masha_clean', role: 'worker', about: 'Уборка квартир и офисов, свои средства.', done_before: 11 },
+  { id: 777, first_name: 'Иван', username: 'ivan_work', role: 'worker', about: 'Опыт на складе 2 года, есть права B.', skills: ['loader', 'warehouse', 'driver'], done_before: 6 },
+  { id: 778, first_name: 'Мария', username: 'masha_clean', role: 'worker', about: 'Уборка квартир и офисов, свои средства.', skills: ['cleaning'], done_before: 11 },
   { id: 779, first_name: 'Тимур', username: null, role: 'worker', about: 'Студент, свободен вечером и в выходные.', done_before: 1 },
   { id: 780, first_name: 'Павел', username: 'pavel_m', role: 'worker', about: 'Крепкий, без вредных привычек. Могу с инструментом.', done_before: 3 },
 ];

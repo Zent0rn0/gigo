@@ -1,15 +1,16 @@
 import { useEffect, useState } from 'react';
 import { api, errorText } from '../api';
 import { HelpSheet, type HelpTopic } from '../components/HelpSheet';
-import { Icon, type IconName } from '../components/Icon';
+import { Icon, categoryIcon, type IconName } from '../components/Icon';
 import { Logo } from '../components/Logo';
 import { Avatar, Stars } from '../components/ui';
 import { plural } from '../format';
 import { haptic } from '../telegram';
-import type { Me, Role } from '../types';
+import type { Me, Meta, Role } from '../types';
 
 interface Props {
   me: Me;
+  meta: Meta;
   onMeChange(me: Me): void;
   onSwitchRole(role: Role): Promise<void>;
   onOpenUser(id: number): void;
@@ -39,7 +40,7 @@ function MenuRow({ icon, title, text, onClick }: { icon: IconName; title: string
   );
 }
 
-export function Profile({ me, onMeChange, onSwitchRole, onOpenUser, onOpenSubs, toast }: Props) {
+export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpenSubs, toast }: Props) {
   const [about, setAbout] = useState(me.about ?? '');
   const [saving, setSaving] = useState(false);
   const [switching, setSwitching] = useState(false);
@@ -59,6 +60,23 @@ export function Profile({ me, onMeChange, onSwitchRole, onOpenUser, onOpenSubs, 
       toast(errorText(e));
     } finally {
       setSaving(false);
+    }
+  };
+
+  // навыки сохраняются сразу при нажатии; на экране — без ожидания сервера
+  const [skills, setSkills] = useState<string[]>(me.skills ?? []);
+  useEffect(() => setSkills(me.skills ?? []), [me.skills]);
+  const toggleSkill = async (id: string) => {
+    haptic('select');
+    const prev = skills;
+    const next = prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id];
+    setSkills(next);
+    try {
+      onMeChange(await api.updateMe({ skills: next }));
+    } catch (e) {
+      setSkills(prev);
+      haptic('error');
+      toast(errorText(e));
     }
   };
 
@@ -120,6 +138,24 @@ export function Profile({ me, onMeChange, onSwitchRole, onOpenUser, onOpenSubs, 
           любой момент.
         </div>
       </section>
+
+      {me.role === 'worker' && (
+        <section className="panel">
+          <div className="field__label">Что умею</div>
+          <div className="chips chips--wrap" role="group" aria-label="Что умею">
+            {meta.categories.map((c) => {
+              const on = skills.includes(c.id);
+              return (
+                <button key={c.id} type="button" className={`chip${on ? ' chip--on' : ''}`} aria-pressed={on} onClick={() => toggleSkill(c.id)}>
+                  <Icon name={categoryIcon(c.id)} size={16} />
+                  {c.label}
+                </button>
+              );
+            })}
+          </div>
+          <div className="hint small">Заказчик увидит это в вашем отклике, а в ленте появится фильтр «Только мои навыки».</div>
+        </section>
+      )}
 
       <section className="panel">
         <label className="field">
