@@ -3,9 +3,10 @@
 #
 #   ./scripts/alpha.sh
 #
-# Собирает Mini App, запускает API и бота и открывает временный HTTPS-адрес через Cloudflare Tunnel
-# или localhost.run через ssh (оба бесплатны, без регистрации). Адрес меняется при каждом запуске,
-# бот сам ставит новый в кнопку меню.
+# Собирает Mini App, запускает API и бота и открывает HTTPS-адрес через бесплатный туннель:
+#   - Tailscale Funnel (если установлен Tailscale): постоянный адрес вида https://mac.tailXXXX.ts.net;
+#   - ngrok (если в .env задан NGROK_DOMAIN): постоянный бесплатный домен ngrok;
+#   - иначе временный адрес Cloudflare Tunnel или localhost.run, он меняется, бот сам ставит новый в кнопку меню.
 # Пока скрипт работает и компьютер не спит, приложение доступно в Telegram. Остановить: Ctrl+C.
 #
 # Нужно один раз: Docker Desktop, backend/.venv (см. README), Node 22; cloudflared желателен, но не обязателен.
@@ -27,7 +28,9 @@ command -v npm >/dev/null || die "Нет Node.js (npm). Установите Nod
 [ -f .env ] || die "Нет файла .env (образец в .env.example)."
 grep -Eq '^BOT_TOKEN=.+' .env || die "В .env не задан BOT_TOKEN."
 
-API_PID=""; TUNNEL_PID=""; BOT_PID=""; AWAKE_PID=""
+env_get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r' || true; }
+
+API_PID=""; TUNNEL_PID=""""; BOT_PID=""; AWAKE_PID=""
 cleanup() {
   say "Останавливаю…"
   for pid in $API_PID $TUNNEL_PID $BOT_PID $AWAKE_PID; do kill "$pid" 2>/dev/null || true; done
@@ -65,8 +68,12 @@ done
 curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null || die "API не запустился, подробности: $LOGS/api.log"
 
 say "4/5 Туннель"
-# Сначала Cloudflare (cloudflared), если его нет или он не пробился, то localhost.run через обычный ssh.
-# Выбрать вручную: TUNNEL=cloudflare или TUNNEL=ssh.
+# Сначала туннели с постоянным адресом (ngrok со своим доменом, Tailscale Funnel): старые кнопки в чате продолжают
+# работать. Потом временные: Cloudflare, затем localhost.run через обычный ssh.
+# Выбрать вручную: TUNNEL=ngrok, TUNNEL=tailscale, TUNNEL=cloudflare или TUNNEL=ssh.
+NGROK_DOMAIN="${NGROK_DOMAIN:-$(env_get NGROK_DOMAIN)}"
+NGROK_DOMAIN="${NGROK_DOMAIN#https://}"; NGROK_DOMAIN="${NGROK_DOMAIN%/}"
+TS="$(command -v tailscale || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale)"
 URL=""
 
 wait_url() {  # $1: шаблон адреса в логе
@@ -112,11 +119,40 @@ try_ssh() {
   return 1
 }
 
+try_ngrok() {
+  [ -n "$NGROK_DOMAIN" ] || { echo "NGROK_DOMAIN не задан в .env"; return 1; }
+  command -v ngrok >/dev/null || { echo "ngrok не установлен (brew install ngrok)"; return 1; }
+  ngrok http "$PORT" --url "https://$NGROK_DOMAIN" --log stdout > "$LOGS/tunnel.log" 2>&1 &
+  TUNNEL_PID=$!
+  wait_url "https://${NGROK_DOMAIN//./\\.}" && reachable && return 0
+  echo "ngrok не отвечает (подробности в tunnel.log; вход: ngrok config add-authtoken <токен>)"
+  stop_tunnel
+  return 1
+}
+
+try_tailscale() {
+  [ -x "$TS" ] || { echo "Tailscale не установлен"; return 1; }
+  "$TS" status >/dev/null 2>&1 || { echo "Tailscale не запущен или не выполнен вход"; return 1; }
+  "$TS" funnel "$PORT" > "$LOGS/tunnel.log" 2>&1 < /dev/null &
+  TUNNEL_PID=$!
+  wait_url 'https://[a-z0-9-]+\.[a-z0-9-]+\.ts\.net' && URL="${URL%/}" && reachable && return 0
+  if grep -q 'login.tailscale.com' "$LOGS/tunnel.log"; then
+    echo "Funnel не включён. Включите по ссылке и запустите скрипт снова:"
+    grep -Eo 'https://login\.tailscale\.com[^ ]+' "$LOGS/tunnel.log" | head -1
+  else
+    echo "Tailscale Funnel не отвечает (подробности в tunnel.log)"
+  fi
+  stop_tunnel
+  return 1
+}
+
 start_tunnel() {
   case "${TUNNEL:-auto}" in
+    ngrok) try_ngrok ;;
+    tailscale) try_tailscale ;;
     cloudflare) try_cloudflare ;;
     ssh) try_ssh ;;
-    *) try_cloudflare || try_ssh ;;
+    *) { [ -n "$NGROK_DOMAIN" ] && try_ngrok; } || { [ -x "$TS" ] && try_tailscale; } || try_cloudflare || try_ssh ;;
   esac
 }
 
@@ -134,6 +170,10 @@ say "Готово: $URL"
 echo "Откройте своего бота в Telegram и нажмите кнопку «Gigo» слева от поля ввода."
 echo "Логи: $LOGS (api.log, bot.log, tunnel.log). Остановить: Ctrl+C."
 echo "Мак не уснёт, пока работает скрипт. Если туннель оборвётся, скрипт поднимет новый и обновит кнопку в боте."
+case "$URL" in *.ts.net|*ngrok*) ;; *)
+  echo "Адрес временный: при смене старые кнопки в чате перестают открываться («no tunnel»)."
+  echo "Постоянный адрес бесплатно: установите Tailscale и включите Funnel (README, раздел «Альфа»)." ;;
+esac
 
 # Не даём компьютеру уснуть, пока жив API.
 if command -v caffeinate >/dev/null; then caffeinate -i -w "$API_PID" & AWAKE_PID=$!; fi
