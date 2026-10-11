@@ -2424,3 +2424,244 @@ button.job-card:active {
 .input--pay::placeholder {
   font-weight: 400;
 }
+
+/* ——— фирменный фиолетовый: герой-блоки, глубина, движение ——— */
+::selection {
+  background: color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+/* Фиолетовый блок в духе обложки: градиент, контурная булавка на фоне, сиреневый текст. */
+.hero {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+  color: #fff;
+  background: var(--brand-gradient);
+  --logo-tile: #fff;
+  --logo-glyph: var(--brand);
+  --hint: color-mix(in srgb, var(--brand-lilac) 88%, #fff);
+}
+
+.hero::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  right: -60px;
+  bottom: -90px;
+  width: 260px;
+  height: 260px;
+  opacity: 0.16;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Cpath d='M29 60A27 27 0 1 1 71 60L54.2 82.5Q50 88 45.8 82.5Z' fill='none' stroke='%23D49CF5' stroke-width='2.4'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.hero::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  left: -80px;
+  top: -120px;
+  width: 260px;
+  height: 260px;
+  border-radius: 50%;
+  background: radial-gradient(closest-side, rgba(255, 255, 255, 0.22), transparent);
+}
+
+.hero__pill {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  padding: 3px 12px;
+  border: 1.5px solid color-mix(in srgb, var(--brand-lilac) 75%, transparent);
+  border-radius: 999px;
+  color: #f1dcfd;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.hero__badge {
+  display: inline-block;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: var(--brand-deep);
+  color: var(--brand-lilac);
+  font-size: 13.5px;
+  font-weight: 700;
+}
+
+/* онбординг */
+.onboarding__head.hero {
+  margin: 0 -4px;
+  padding: 56px 16px 22px;
+  border-radius: 26px;
+  box-shadow: 0 14px 40px -16px color-mix(in srgb, var(--brand) 70%, transparent);
+}
+
+.onboarding__head.hero .onboarding__tagline {
+  margin: 14px 0 12px;
+  color: #ecc9fb;
+  font-size: 24px;
+  font-weight: 850;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+.hero .steps {
+  margin-top: 20px;
+}
+
+.hero .steps__item {
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  color: #fff;
+}
+
+.hero .steps__icon {
+  color: var(--brand);
+  background: #fff;
+}
+
+.role-card {
+  transition: transform 0.12s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.role-card:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--brand) 40%, transparent);
+}
+
+.role-card__icon {
+  background: var(--brand-gradient);
+  box-shadow: 0 6px 16px -6px color-mix(in srgb, var(--brand) 80%, transparent);
+}
+
+.role-card__icon--employer {
+  background: linear-gradient(135deg, #6a17d4, var(--brand-deep));
+  color: #fff;
+}
+
+/* профиль */
+.profile-head.hero {
+  margin: 12px 12px 0;
+  padding: 20px 16px;
+  border-radius: 22px;
+  box-shadow: 0 12px 32px -18px color-mix(in srgb, var(--brand) 80%, transparent);
+}
+
+.profile-head.hero .app-title {
+  color: #fff;
+}
+
+.profile-head.hero .avatar {
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.85);
+}
+
+.profile-head.hero b {
+  color: #fff;
+}
+
+/* лента: город — сиреневая плашка */
+.app-title__city {
+  display: inline-block;
+  margin-left: 2px;
+  padding: 1px 10px 2px;
+  border-radius: 999px;
+  vertical-align: 2px;
+  font-size: 15px;
+  font-weight: 650;
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+}
+
+/* кнопки: фирменный градиент и мягкое свечение */
+.btn--primary {
+  background: var(--brand-gradient);
+  box-shadow: 0 6px 18px -8px color-mix(in srgb, var(--brand) 90%, transparent);
+}
+
+.btn--primary:disabled {
+  box-shadow: none;
+}
+
+.btn--secondary {
+  background: var(--brand-soft);
+}
+
+.chip--on {
+  background: var(--brand-gradient);
+  border-color: transparent;
+  box-shadow: 0 4px 12px -6px color-mix(in srgb, var(--brand) 90%, transparent);
+}
+
+.tabbar__item--on .tabbar__icon {
+  background: var(--brand-soft);
+}
+
+.job-card--hot {
+  box-shadow: inset 4px 0 0 var(--brand), 0 6px 20px -14px color-mix(in srgb, var(--brand) 90%, transparent);
+}
+
+/* скелетон с фиолетовым отливом */
+.sk {
+  background: linear-gradient(90deg, var(--fill) 25%, color-mix(in srgb, var(--brand) 14%, transparent) 50%, var(--fill) 75%);
+  background-size: 200% 100%;
+}
+
+/* пустые состояния: значок в ореоле */
+.state__icon {
+  position: relative;
+}
+
+.state__icon--brand,
+.state__icon--neutral {
+  color: var(--brand-ink);
+  background: var(--brand-soft);
+  box-shadow: 0 0 0 8px color-mix(in srgb, var(--brand) 6%, transparent);
+}
+
+.state__icon--brand {
+  color: #fff;
+  background: var(--brand-gradient);
+}
+
+/* движение: экраны и карточки появляются мягко */
+.pane:not([hidden]) {
+  animation: fade-in 0.18s ease-out;
+}
+
+/* без transform на самом слое: иначе «прилипшая» нижняя панель (position: fixed) прыгает во время анимации */
+.layer:not([hidden]) {
+  animation: fade-in 0.16s ease-out;
+}
+
+.layer:not([hidden]) > .screen > :not(.action-bar) {
+  animation: rise-in 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.list > * {
+  animation: rise-in 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) backwards;
+}
+
+.list > :nth-child(2) { animation-delay: 30ms; }
+.list > :nth-child(3) { animation-delay: 60ms; }
+.list > :nth-child(4) { animation-delay: 90ms; }
+.list > :nth-child(5) { animation-delay: 120ms; }
+.list > :nth-child(n + 6) { animation-delay: 150ms; }
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pane:not([hidden]),
+  .layer:not([hidden]),
+  .layer:not([hidden]) > .screen > *,
+  .list > * {
+    animation: none;
+  }
+}

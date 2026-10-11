@@ -29,7 +29,7 @@ const STEPS: { icon: IconName; text: string }[] = [
   { icon: 'message', text: 'Договариваетесь в Telegram' },
 ];
 
-export function Onboarding({ me, onDone }: { me: Me; onDone(me: Me): void }) {
+export function Onboarding({ me, city, onDone }: { me: Me; city: string; onDone(me: Me): void }) {
   const [busy, setBusy] = useState<Role | null>(null);
   const [error, setError] = useState('');
   const [help, setHelp] = useState(false);
@@ -51,9 +51,11 @@ export function Onboarding({ me, onDone }: { me: Me; onDone(me: Me): void }) {
 
   return (
     <div className="onboarding">
-      <div className="onboarding__head">
-        <Logo height={44} />
+      <div className="onboarding__head hero">
+        <span className="hero__pill">{city}</span>
+        <Logo height={48} />
         <p className="onboarding__tagline">Подработка рядом</p>
+        <span className="hero__badge">бесплатно · отклик в один тап</span>
         <ol className="steps" aria-label="Как это работает">
           {STEPS.map((s, i) => (
             <li key={i} className="steps__item">

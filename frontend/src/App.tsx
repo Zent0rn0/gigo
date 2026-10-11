@@ -301,6 +301,7 @@ export function App() {
       <div className="app">
         <Onboarding
           me={me}
+          city={meta.city.name}
           onDone={(u) => {
             setMe(u);
             if (u.role) enterRole(u.role, true);
@@ -321,7 +322,7 @@ export function App() {
       {stack.map((o, i) => {
         const top = i === stack.length - 1;
         return (
-          <div key={o.key} hidden={!top}>
+          <div key={o.key} className="layer" hidden={!top}>
             {o.kind === 'job' && (
               <JobDetail
                 jobId={o.id}
@@ -355,7 +356,7 @@ export function App() {
 
       <div className="tabs" hidden={hasOverlay}>
         {shown('feed') && (
-          <div hidden={tab !== 'feed'}>
+          <div className="pane" hidden={tab !== 'feed'}>
             <Feed
               meta={meta}
               active={on('feed')}
@@ -371,12 +372,12 @@ export function App() {
           </div>
         )}
         {shown('map') && (
-          <div hidden={tab !== 'map'}>
+          <div className="pane" hidden={tab !== 'map'}>
             <MapView meta={meta} filters={filters} location={location} active={on('map')} onOpenJob={openJob} />
           </div>
         )}
         {shown('responses') && (
-          <div hidden={tab !== 'responses'}>
+          <div className="pane" hidden={tab !== 'responses'}>
             <MyResponses
               meta={meta}
               active={on('responses')}
@@ -389,12 +390,12 @@ export function App() {
           </div>
         )}
         {shown('my') && (
-          <div hidden={tab !== 'my'}>
+          <div className="pane" hidden={tab !== 'my'}>
             <MyJobs meta={meta} active={on('my')} version={version} onOpenJob={openJob} onCreate={() => switchTab('create')} />
           </div>
         )}
         {shown('create') && (
-          <div hidden={tab !== 'create'}>
+          <div className="pane" hidden={tab !== 'create'}>
             <CreateJob
               meta={meta}
               me={me}
@@ -410,7 +411,7 @@ export function App() {
           </div>
         )}
         {shown('profile') && (
-          <div hidden={tab !== 'profile'}>
+          <div className="pane" hidden={tab !== 'profile'}>
             <Profile me={me} onMeChange={setMe} onSwitchRole={switchRole} onOpenUser={openUser} onOpenSubs={openSubs} toast={toast} />
           </div>
         )}

@@ -1,6 +1,9 @@
 import { useId } from 'react';
 
-/** Знак Gigo: булавка карты, в которую вписана «G». Исходники — public/logo.svg, public/favicon.svg, docs/brand/. */
+/**
+ * Знак Gigo: булавка карты, в которую вписана «G». Исходники — public/logo.svg, public/favicon.svg, docs/brand/.
+ * Цвета плитки и знака — --logo-tile / --logo-glyph (по умолчанию фиолетовая плитка и белая «G»); на фиолетовом фоне их меняют местами.
+ */
 function GlyphMask({ id }: { id: string }) {
   return (
     <mask id={id} maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100">
@@ -19,8 +22,8 @@ export function LogoMark({ size = 40 }: { size?: number }) {
       <defs>
         <GlyphMask id={id} />
       </defs>
-      <rect width="100" height="100" rx="26" fill="var(--brand)" />
-      <rect width="100" height="100" fill="#fff" mask={`url(#${id})`} />
+      <rect width="100" height="100" rx="26" fill="var(--logo-tile, var(--brand))" />
+      <rect width="100" height="100" fill="var(--logo-glyph, #fff)" mask={`url(#${id})`} />
     </svg>
   );
 }
@@ -33,8 +36,8 @@ export function Logo({ height = 32 }: { height?: number }) {
       <defs>
         <GlyphMask id={id} />
       </defs>
-      <rect width="100" height="100" rx="26" fill="var(--brand)" />
-      <rect width="100" height="100" fill="#fff" mask={`url(#${id})`} />
+      <rect width="100" height="100" rx="26" fill="var(--logo-tile, var(--brand))" />
+      <rect width="100" height="100" fill="var(--logo-glyph, #fff)" mask={`url(#${id})`} />
       <g fill="none" stroke="currentColor" strokeWidth="12" strokeLinecap="round">
         <circle cx="140" cy="50" r="14" />
         <path d="M154 36V74A14 14 0 0 1 127.9 81" />

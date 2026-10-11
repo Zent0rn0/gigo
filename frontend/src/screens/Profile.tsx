@@ -74,7 +74,7 @@ export function Profile({ me, onMeChange, onSwitchRole, onOpenUser, onOpenSubs, 
 
   return (
     <div className="screen">
-      <header className="profile-head">
+      <header className="profile-head hero">
         <Avatar name={me.first_name} size={64} />
         <div className="profile-head__text">
           <h1 className="app-title">{me.first_name}</h1>
