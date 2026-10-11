@@ -27,10 +27,10 @@ command -v npm >/dev/null || die "Нет Node.js (npm). Установите Nod
 [ -f .env ] || die "Нет файла .env (образец в .env.example)."
 grep -Eq '^BOT_TOKEN=.+' .env || die "В .env не задан BOT_TOKEN."
 
-PIDS=()
+API_PID=""; TUNNEL_PID=""; BOT_PID=""; AWAKE_PID=""
 cleanup() {
   say "Останавливаю…"
-  for pid in "${PIDS[@]}" ${TUNNEL_PID:-}; do kill "$pid" 2>/dev/null || true; done
+  for pid in $API_PID $TUNNEL_PID $BOT_PID $AWAKE_PID; do kill "$pid" 2>/dev/null || true; done
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -57,7 +57,7 @@ say "3/5 API"
 # Вход только через Telegram: DEV_AUTH выключен, что бы ни было в .env.
 ( cd backend && DEV_AUTH=0 STATIC_DIR="$ROOT/frontend/dist" \
     exec .venv/bin/uvicorn gigo.api.app:app --host 127.0.0.1 --port "$PORT" ) > "$LOGS/api.log" 2>&1 &
-PIDS+=($!)
+API_PID=$!
 for _ in $(seq 1 30); do
   curl -fs "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1 && break
   sleep 1
@@ -68,7 +68,6 @@ say "4/5 Туннель"
 # Сначала Cloudflare (cloudflared), если его нет или он не пробился, то localhost.run через обычный ssh.
 # Выбрать вручную: TUNNEL=cloudflare или TUNNEL=ssh.
 URL=""
-TUNNEL_PID=""
 
 wait_url() {  # $1: шаблон адреса в логе
   URL=""
@@ -113,28 +112,67 @@ try_ssh() {
   return 1
 }
 
-case "${TUNNEL:-auto}" in
-  cloudflare) try_cloudflare ;;
-  ssh) try_ssh ;;
-  *) try_cloudflare || try_ssh ;;
-esac || die "Ни один туннель не поднялся. Чаще всего мешает VPN или провайдер: включите в VPN режим «весь трафик» и запустите снова."
-PIDS+=("$TUNNEL_PID")
+start_tunnel() {
+  case "${TUNNEL:-auto}" in
+    cloudflare) try_cloudflare ;;
+    ssh) try_ssh ;;
+    *) try_cloudflare || try_ssh ;;
+  esac
+}
+
+start_tunnel || die "Ни один туннель не поднялся. Чаще всего мешает VPN или провайдер: включите в VPN режим «весь трафик» и запустите снова."
 
 say "5/5 Бот"
-( cd backend && DEV_AUTH=0 WEBAPP_URL="$URL" exec .venv/bin/python -m gigo.bot ) > "$LOGS/bot.log" 2>&1 &
-PIDS+=($!)
+start_bot() {  # бот при старте ставит текущий адрес в кнопку меню
+  [ -n "$BOT_PID" ] && kill "$BOT_PID" 2>/dev/null && wait "$BOT_PID" 2>/dev/null || true
+  ( cd backend && DEV_AUTH=0 WEBAPP_URL="$URL" exec .venv/bin/python -m gigo.bot ) >> "$LOGS/bot.log" 2>&1 &
+  BOT_PID=$!
+}
+start_bot
 
 say "Готово: $URL"
 echo "Откройте своего бота в Telegram и нажмите кнопку «Gigo» слева от поля ввода."
 echo "Логи: $LOGS (api.log, bot.log, tunnel.log). Остановить: Ctrl+C."
-echo "Мак не уснёт, пока работает скрипт."
+echo "Мак не уснёт, пока работает скрипт. Если туннель оборвётся, скрипт поднимет новый и обновит кнопку в боте."
 
-# Не даём компьютеру уснуть, пока живы API, туннель и бот.
-if command -v caffeinate >/dev/null; then caffeinate -i -w "${PIDS[0]}" & PIDS+=($!); fi
-while kill -0 "${PIDS[0]}" 2>/dev/null && kill -0 "${PIDS[1]}" 2>/dev/null && kill -0 "${PIDS[2]}" 2>/dev/null; do
-  sleep 5
+# Не даём компьютеру уснуть, пока жив API.
+if command -v caffeinate >/dev/null; then caffeinate -i -w "$API_PID" & AWAKE_PID=$!; fi
+
+# sleep в фоне + wait: так Ctrl+C и kill срабатывают сразу, а не после паузы.
+nap() { sleep "$1" & wait $! || true; }
+
+# Сторож: туннель бесплатный и иногда обрывается или меняет адрес. Тогда поднимаем новый и перезапускаем бота.
+fails=0
+while true; do
+  nap 10
+  kill -0 "$API_PID" 2>/dev/null || die "API остановился. Последние строки: $(tail -5 "$LOGS/api.log" 2>/dev/null)"
+  # localhost.run сам меняет адрес, не разрывая соединение: новый адрес появляется в его логе.
+  NEW="$(grep -Eo 'https://[a-z0-9-]+\.(lhr\.life|trycloudflare\.com)' "$LOGS/tunnel.log" | tail -1 || true)"
+  if [ -n "$NEW" ] && [ "$NEW" != "$URL" ]; then
+    URL="$NEW"
+    fails=0
+    start_bot
+    echo "$(date '+%H:%M') туннель сменил адрес: $URL, кнопка в боте обновлена"
+    continue
+  fi
+  if kill -0 "$TUNNEL_PID" 2>/dev/null && curl -fs --max-time 10 "$URL/api/health" >/dev/null 2>&1; then
+    fails=0
+  else
+    fails=$((fails + 1))
+  fi
+  if [ "$fails" -ge 4 ] || ! kill -0 "$TUNNEL_PID" 2>/dev/null; then
+    echo "$(date '+%H:%M') туннель $URL не отвечает, поднимаю новый…"
+    stop_tunnel
+    if start_tunnel; then
+      fails=0
+      start_bot
+      echo "$(date '+%H:%M') новый адрес: $URL, кнопка в боте обновлена"
+    else
+      echo "$(date '+%H:%M') туннель не поднялся, попробую ещё раз через минуту"
+      nap 40
+    fi
+  elif ! kill -0 "$BOT_PID" 2>/dev/null; then
+    echo "$(date '+%H:%M') бот остановился, перезапускаю (подробности в bot.log)"
+    start_bot
+  fi
 done
-die "Что-то остановилось. Последние строки логов:
-$(tail -5 "$LOGS/api.log" 2>/dev/null)
-$(tail -5 "$LOGS/tunnel.log" 2>/dev/null)
-$(tail -5 "$LOGS/bot.log" 2>/dev/null)"
