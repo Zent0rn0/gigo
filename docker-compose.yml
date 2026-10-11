@@ -1,3 +1,19 @@
+# Локальная разработка: docker compose up -d db
+# Сервер целиком:      docker compose --profile prod up -d --build
+
+x-backend: &backend
+  build: ./backend
+  restart: unless-stopped
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql://${POSTGRES_USER:-gigo}:${POSTGRES_PASSWORD:-gigo}@db:5432/${POSTGRES_DB:-gigo}
+  depends_on:
+    db:
+      condition: service_healthy
+  logging:
+    options: {max-size: "10m", max-file: "5"}
+  profiles: ["prod"]
+
 services:
   db:
     image: postgis/postgis:16-3.4
@@ -10,27 +26,73 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 3s
       retries: 20
 
-  collector:
-    build: ./backend
-    restart: unless-stopped
-    command: python -m gigo.collector run
-    env_file: .env
+  # API для Mini App; при старте сам применяет миграции базы
+  api:
+    <<: *backend
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-gigo}:${POSTGRES_PASSWORD:-gigo}@db:5432/${POSTGRES_DB:-gigo}
+      STATIC_DIR: /nonexistent   # статику раздаёт Caddy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  # Аккаунт-сборщик: читает чаты. Вход один раз: docker compose run --rm collector python -m gigo.collector login
+  collector:
+    <<: *backend
+    command: python -m gigo.collector run
     volumes:
       - ./data:/app/data
       - ./sources.txt:/app/sources.txt:ro
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gigo}:${POSTGRES_PASSWORD:-gigo}@db:5432/${POSTGRES_DB:-gigo}
+      DATA_DIR: /app/data
+      SOURCES_FILE: /app/sources.txt
     depends_on:
-      db:
-        condition: service_healthy
-    profiles: ["collector"]
+      api:
+        condition: service_started
+
+  # Разбор объявлений ИИ
+  parser:
+    <<: *backend
+    command: python -m gigo.parser run
+    depends_on:
+      api:
+        condition: service_started
+
+  # Бот: кнопка Mini App и push по подпискам
+  bot:
+    <<: *backend
+    command: python -m gigo.bot
+    depends_on:
+      api:
+        condition: service_started
+
+  # Mini App + HTTPS
+  web:
+    build:
+      context: .
+      dockerfile: deploy/web.Dockerfile
+      args:
+        VITE_YANDEX_MAPS_KEY: ${VITE_YANDEX_MAPS_KEY:-}
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddy_data:/data
+    depends_on: [api]
+    profiles: ["prod"]
 
 volumes:
   pgdata:
+  caddy_data:

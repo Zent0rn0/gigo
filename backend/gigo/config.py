@@ -15,6 +15,10 @@ def _int(name: str, default: int) -> int:
     return int(value) if value else default
 
 
+def _str(name: str) -> str | None:
+    return os.getenv(name, "").strip() or None
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -27,6 +31,17 @@ class Settings:
     join_delay_min: int
     join_delay_max: int
     join_batch: int
+    llm_provider: str
+    anthropic_api_key: str | None
+    claude_model: str
+    yandex_api_key: str | None
+    yandex_folder_id: str | None
+    yandex_gpt_model: str
+    yandex_geocoder_key: str | None
+    parser_concurrency: int
+    bot_token: str | None
+    webapp_url: str | None
+    dev_auth: bool
 
     @property
     def session_path(self) -> Path:
@@ -55,4 +70,15 @@ def load() -> Settings:
         join_delay_min=_int("JOIN_DELAY_MIN", 120),
         join_delay_max=_int("JOIN_DELAY_MAX", 300),
         join_batch=_int("JOIN_BATCH", 5),
+        llm_provider=os.getenv("LLM_PROVIDER", "claude").strip().lower(),
+        anthropic_api_key=_str("ANTHROPIC_API_KEY"),
+        claude_model=os.getenv("CLAUDE_MODEL", "claude-haiku-5-5"),
+        yandex_api_key=_str("YANDEX_GPT_API_KEY"),
+        yandex_folder_id=_str("YANDEX_FOLDER_ID"),
+        yandex_gpt_model=os.getenv("YANDEX_GPT_MODEL", "yandexgpt-lite/latest"),
+        yandex_geocoder_key=_str("YANDEX_GEOCODER_KEY"),
+        parser_concurrency=_int("PARSER_CONCURRENCY", 4),
+        bot_token=_str("BOT_TOKEN"),
+        webapp_url=_str("WEBAPP_URL"),
+        dev_auth=os.getenv("DEV_AUTH", "").strip() in ("1", "true", "yes"),
     )

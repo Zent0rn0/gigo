@@ -1,25 +1,8 @@
 """Тесты с настоящей базой. Нужен запущенный `docker compose up -d db` (или TEST_DATABASE_URL)."""
 
-import os
 from datetime import datetime, timezone
 
-import asyncpg
-import pytest
-
 from gigo import db
-
-URL = os.getenv("TEST_DATABASE_URL", "postgresql://gigo:gigo@localhost:5432/gigo")
-
-
-@pytest.fixture
-async def pool():
-    try:
-        pool = await db.connect(URL)
-    except (OSError, asyncpg.PostgresError) as e:
-        pytest.skip(f"база недоступна: {e}")
-    await pool.execute("TRUNCATE raw_messages, sources RESTART IDENTITY CASCADE")
-    yield pool
-    await pool.close()
 
 
 def _raw(text, message_id=1):
