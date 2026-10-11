@@ -45,7 +45,7 @@ export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return (
-    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.42, background: `hsl(${h} 50% 44%)` }} aria-hidden="true">
+    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.42, background: `linear-gradient(135deg, hsl(${h} 62% 58%), hsl(${(h + 28) % 360} 58% 42%))` }} aria-hidden="true">
       {initial(name)}
     </span>
   );
