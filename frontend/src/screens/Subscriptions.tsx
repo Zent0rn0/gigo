@@ -3,19 +3,19 @@ import { api, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { MetroDot } from '../components/MetroDot';
 import { rub } from '../format';
-import { haptic } from '../telegram';
+import { backButtonSupported, haptic } from '../telegram';
 import type { Meta, Subscription } from '../types';
 
 interface Props {
   meta: Meta | null;
-  version: number;
+  onBack(): void;
   onGoFeed(): void;
   toast(text: string): void;
 }
 
 const LIMIT = 10;
 
-export function Subscriptions({ meta, version, onGoFeed, toast }: Props) {
+export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
   const [subs, setSubs] = useState<Subscription[]>([]);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [error, setError] = useState('');
@@ -41,7 +41,7 @@ export function Subscriptions({ meta, version, onGoFeed, toast }: Props) {
     return () => {
       alive = false;
     };
-  }, [version, attempt]);
+  }, [attempt]);
 
   const remove = async (id: number) => {
     setDeleting(id);
@@ -60,10 +60,17 @@ export function Subscriptions({ meta, version, onGoFeed, toast }: Props) {
   };
 
   return (
-    <div className="screen">
+    <div className="screen screen--detail">
+      {!backButtonSupported && (
+        <div className="topbar">
+          <button type="button" className="link-btn topbar__back" onClick={onBack}>
+            ‹ Назад
+          </button>
+        </div>
+      )}
       <header className="feed-head">
         <h1 className="app-title">Подписки</h1>
-        <p className="hint lead">Новые заказы под ваши фильтры бот пришлёт сообщением в Telegram.</p>
+        <p className="hint lead">Новые заявки под ваши фильтры бот пришлёт сообщением в Telegram.</p>
       </header>
 
       {status === 'loading' && (
@@ -77,7 +84,7 @@ export function Subscriptions({ meta, version, onGoFeed, toast }: Props) {
         <EmptyState
           icon="🔔"
           title="Подписок пока нет"
-          text="Настройте фильтр в ленте и нажмите «Подписаться на этот фильтр»."
+          text="Настройте фильтр в ленте и нажмите «Подписаться на такие заявки»."
           action={
             <button type="button" className="btn btn--primary" onClick={onGoFeed}>
               Перейти в ленту

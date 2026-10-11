@@ -24,7 +24,7 @@ export function MapView(props: Props) {
         <EmptyState
           icon="🗺️"
           title="Карта появится, когда будет задан ключ Яндекс Карт"
-          text="Пока все заказы есть во вкладке «Лента»."
+          text="Пока все заявки есть во вкладке «Лента»."
         />
       </div>
     );
@@ -196,12 +196,12 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
         )}
         {mapState === 'ready' && data.status === 'loading' && (
           <span className="map-pill">
-            <Spinner /> Ищем заказы…
+            <Spinner /> Ищем заявки…
           </span>
         )}
         {mapState === 'ready' && data.status === 'ready' && (
           <span className="map-pill">
-            {data.count} {plural(data.count, ['заказ', 'заказа', 'заказов'])} на карте
+            {data.count} {plural(data.count, ['заявка', 'заявки', 'заявок'])} на карте
             {!isEmptyFilter(filters) && ' · фильтр как в ленте'}
           </span>
         )}

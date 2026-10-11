@@ -14,6 +14,19 @@ interface TgHaptic {
   selectionChanged(): void;
 }
 
+interface TgMainButton {
+  isVisible: boolean;
+  setText(text: string): void;
+  show(): void;
+  hide(): void;
+  enable(): void;
+  disable(): void;
+  showProgress(leaveActive?: boolean): void;
+  hideProgress(): void;
+  onClick(cb: () => void): void;
+  offClick(cb: () => void): void;
+}
+
 export interface TgWebApp {
   initData: string;
   initDataUnsafe: { start_param?: string; user?: { id: number; first_name?: string } };
@@ -24,8 +37,10 @@ export interface TgWebApp {
   ready(): void;
   expand(): void;
   BackButton: TgBackButton;
+  MainButton?: TgMainButton;
   HapticFeedback?: TgHaptic;
   openTelegramLink(url: string): void;
+  showAlert?(message: string): void;
   openLink(url: string): void;
 }
 
@@ -91,13 +106,33 @@ export function openLink(url: string): void {
   window.open(url, '_blank', 'noopener');
 }
 
-/** id заказа из ?job=<id> или start_param «job_<id>». */
-export function deepLinkJobId(): number | null {
-  const fromStart = tg?.initDataUnsafe?.start_param;
-  if (fromStart) {
-    const m = /^job_(\d+)$/.exec(fromStart);
-    if (m) return Number(m[1]);
+export const mainButtonSupported = inTelegram && !!tg?.MainButton;
+
+/** Открыть контакт второй стороны: https://t.me/… — внутри Telegram, tg://… и прочее — window.open. */
+export function openContact(url: string): void {
+  haptic('light');
+  if (/^https:\/\/t\.me\//i.test(url) && inTelegram && tg) {
+    try {
+      tg.openTelegramLink(url);
+      return;
+    } catch {
+      /* fallback ниже */
+    }
   }
+  if (/^tg:/i.test(url) && inTelegram && tg?.showAlert) {
+    // Mini App не открывает tg://user?id=…: у человека нет username, ссылка на профиль есть в сообщении бота.
+    tg.showAlert('У этого человека нет имени пользователя в Telegram. Ссылка на его профиль пришла вам в чат с ботом Gigo.');
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
+}
+
+const startParam = (): string => tg?.initDataUnsafe?.start_param ?? '';
+
+/** id заявки из ?job=<id> или start_param «job_<id>». */
+export function deepLinkJobId(): number | null {
+  const m = /^job_(\d+)$/.exec(startParam());
+  if (m) return Number(m[1]);
   try {
     const q = new URLSearchParams(window.location.search).get('job');
     if (q && /^\d+$/.test(q)) return Number(q);
@@ -105,4 +140,16 @@ export function deepLinkJobId(): number | null {
     /* ignore */
   }
   return null;
+}
+
+/** Вкладка из ?tab=responses|my или start_param «tab_responses» / «tab_my». */
+export function deepLinkTab(): 'responses' | 'my' | null {
+  const ok = (v: string | null | undefined) => (v === 'responses' || v === 'my' ? v : null);
+  const m = /^tab_(\w+)$/.exec(startParam());
+  if (m && ok(m[1])) return ok(m[1]);
+  try {
+    return ok(new URLSearchParams(window.location.search).get('tab'));
+  } catch {
+    return null;
+  }
 }

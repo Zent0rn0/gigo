@@ -1,49 +1,70 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api, errorText } from './api';
-import { TabBar, type Tab } from './components/TabBar';
+import { ROLE_TABS, TabBar, type Tab } from './components/TabBar';
 import { ErrorState, Spinner } from './components/States';
 import { loadFilters, saveFilters, type Filters } from './filters';
 import { getPosition } from './geo';
+import { CreateJob } from './screens/CreateJob';
 import { Feed } from './screens/Feed';
 import { JobDetail } from './screens/JobDetail';
 import { MapView } from './screens/MapView';
+import { MyJobs } from './screens/MyJobs';
+import { MyResponses } from './screens/MyResponses';
+import { Onboarding } from './screens/Onboarding';
+import { Profile } from './screens/Profile';
 import { Subscriptions } from './screens/Subscriptions';
-import { backButtonSupported, deepLinkJobId, haptic, tg } from './telegram';
-import type { GeoPoint, Job, Meta } from './types';
+import { UserProfile } from './screens/UserProfile';
+import { backButtonSupported, deepLinkJobId, deepLinkTab, haptic, tg } from './telegram';
+import type { GeoPoint, Job, Me, Meta, Role } from './types';
 
-interface Detail {
-  id: number;
-  job: Job | null;
+/** Экраны поверх вкладок: карточка заявки, профиль человека, подписки. */
+type OverlayInit = { kind: 'job'; id: number; job: Job | null } | { kind: 'user'; id: number } | { kind: 'subs' };
+type Overlay = OverlayInit & { key: number; pushed: boolean };
+
+function initialTab(role: Role): Tab {
+  const t = deepLinkTab();
+  return t && ROLE_TABS[role].includes(t) ? t : ROLE_TABS[role][0];
+}
+
+function dropQuery(...keys: string[]) {
+  try {
+    const url = new URL(window.location.href);
+    let changed = false;
+    for (const k of keys)
+      if (url.searchParams.has(k)) {
+        url.searchParams.delete(k);
+        changed = true;
+      }
+    if (changed) history.replaceState(history.state, '', url.toString());
+  } catch {
+    /* ignore */
+  }
 }
 
 export function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
-  const [metaError, setMetaError] = useState('');
-  const [metaAttempt, setMetaAttempt] = useState(0);
+  const [me, setMe] = useState<Me | null>(null);
+  const [bootError, setBootError] = useState('');
+  const [bootAttempt, setBootAttempt] = useState(0);
 
   const [tab, setTab] = useState<Tab>('feed');
-  const [visited, setVisited] = useState<Set<Tab>>(() => new Set<Tab>(['feed']));
-  const [detail, setDetail] = useState<Detail | null>(() => {
+  const [visited, setVisited] = useState<Set<Tab>>(() => new Set<Tab>());
+  const [stack, setStack] = useState<Overlay[]>(() => {
     const id = deepLinkJobId();
-    return id != null ? { id, job: null } : null;
+    return id != null ? [{ kind: 'job', id, job: null, key: 0, pushed: false }] : [];
   });
+  const stackRef = useRef(stack);
+  stackRef.current = stack;
+  const keySeq = useRef(1);
+
+  const [version, setVersion] = useState(0);
+  const bump = useCallback(() => setVersion((v) => v + 1), []);
+  const [patches, setPatches] = useState<Record<number, Job>>({});
 
   const [filters, setFilters] = useState<Filters>(loadFilters);
   const [location, setLocation] = useState<GeoPoint | null>(null);
   const [locating, setLocating] = useState(false);
-  const [subsVersion, setSubsVersion] = useState(0);
   const [toastText, setToastText] = useState<string | null>(null);
-
-  // справочники
-  useEffect(() => {
-    setMetaError('');
-    api
-      .meta()
-      .then(setMeta)
-      .catch((e) => setMetaError(errorText(e)));
-  }, [metaAttempt]);
-
-  useEffect(() => saveFilters(filters), [filters]);
 
   const toast = useCallback((text: string) => setToastText(text), []);
   useEffect(() => {
@@ -51,6 +72,31 @@ export function App() {
     const t = window.setTimeout(() => setToastText(null), 3500);
     return () => window.clearTimeout(t);
   }, [toastText]);
+
+  const enterRole = useCallback((role: Role, first: boolean) => {
+    const t = first ? initialTab(role) : ROLE_TABS[role][0];
+    setTab(t);
+    setVisited(new Set<Tab>([t]));
+  }, []);
+
+  // справочники и текущий пользователь
+  useEffect(() => {
+    setBootError('');
+    Promise.all([api.meta(), api.me()])
+      .then(([m, u]) => {
+        setMeta(m);
+        setMe(u);
+        if (u.role) {
+          enterRole(u.role, true);
+          const t = deepLinkTab();
+          if (t && !ROLE_TABS[u.role].includes(t))
+            toast(t === 'responses' ? 'Отклики видны в роли исполнителя. Сменить роль можно в профиле.' : 'Мои заявки видны в роли заказчика. Сменить роль можно в профиле.');
+        }
+      })
+      .catch((e) => setBootError(errorText(e)));
+  }, [bootAttempt, enterRole, toast]);
+
+  useEffect(() => saveFilters(filters), [filters]);
 
   const locate = useCallback(async (): Promise<GeoPoint | null> => {
     setLocating(true);
@@ -86,81 +132,131 @@ export function App() {
     else toast('Не удалось определить, где вы. Разрешите доступ к геопозиции и попробуйте снова.');
   }, [filters.nearMe, location, locate, toast]);
 
-  // навигация
-  const scrollPos = useRef<Record<Tab, number>>({ feed: 0, map: 0, subs: 0 });
+  // ——— навигация ———
+  const tabScroll = useRef<Partial<Record<Tab, number>>>({});
+  const overlayScroll = useRef<number[]>([]);
 
-  const openJob = useCallback(
-    (job: Job) => {
-      haptic('light');
-      scrollPos.current[tab] = window.scrollY;
-      try {
-        history.pushState({ gigoDetail: job.id }, '');
-      } catch {
-        /* ignore */
-      }
-      setDetail({ id: job.id, job });
-    },
-    [tab],
-  );
+  const push = useCallback((o: OverlayInit, restoreY?: number) => {
+    haptic('light');
+    const cur = stackRef.current;
+    overlayScroll.current[cur.length] = restoreY ?? window.scrollY;
+    const depth = cur.filter((x) => x.pushed).length + 1;
+    let pushed = false;
+    try {
+      history.pushState({ gigoDepth: depth }, '');
+      pushed = true;
+    } catch {
+      /* ignore */
+    }
+    setStack((s) => [...s, { ...o, key: keySeq.current++, pushed }]);
+  }, []);
 
-  const closeDetail = useCallback(() => {
-    // карточка открыта из приложения — снимаем свою запись истории (popstate закроет карточку)
-    if (history.state && history.state.gigoDetail != null) history.back();
-    else {
-      // открыта по ссылке ?job=…: убрать параметр, чтобы перезагрузка не открывала её снова
-      try {
-        const url = new URL(window.location.href);
-        if (url.searchParams.has('job')) {
-          url.searchParams.delete('job');
-          history.replaceState(history.state, '', url.toString());
-        }
-      } catch {
-        /* ignore */
-      }
-      setDetail(null);
+  const pop = useCallback(() => {
+    const cur = stackRef.current;
+    const top = cur[cur.length - 1];
+    if (!top) return;
+    if (top.pushed && history.state && history.state.gigoDepth != null) {
+      history.back(); // popstate снимет экран
+    } else {
+      // открыт по ссылке ?job=…: убрать параметр, чтобы перезагрузка не открывала его снова
+      dropQuery('job');
+      setStack((s) => s.slice(0, -1));
     }
   }, []);
 
-  const switchTab = (t: Tab) => {
-    if (t === tab) {
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    haptic('select');
-    scrollPos.current[tab] = window.scrollY;
-    setVisited((v) => (v.has(t) ? v : new Set(v).add(t)));
-    setTab(t);
-  };
-
-  // вернуть прокрутку при смене вкладки и закрытии карточки
-  useLayoutEffect(() => {
-    if (!detail) window.scrollTo(0, scrollPos.current[tab]);
-  }, [tab, detail]);
-
-  // Telegram BackButton в карточке
+  // системная «назад» в браузере / Android
   useEffect(() => {
-    if (!detail || !backButtonSupported || !tg) return;
-    const bb = tg.BackButton;
-    bb.onClick(closeDetail);
-    bb.show();
-    return () => {
-      bb.offClick(closeDetail);
-      bb.hide();
+    const onPop = () => {
+      const d = (history.state && history.state.gigoDepth) || 0;
+      setStack((s) => {
+        let n = 0;
+        const out: Overlay[] = [];
+        for (const x of s) {
+          if (x.pushed && ++n > d) break;
+          out.push(x);
+        }
+        return out.length === s.length ? s : out;
+      });
     };
-  }, [detail, closeDetail]);
-
-  // Системная кнопка «назад» браузера / Android тоже закрывает карточку
-  useEffect(() => {
-    const onPop = () => setDetail(null);
     window.addEventListener('popstate', onPop);
     return () => window.removeEventListener('popstate', onPop);
   }, []);
 
-  if (!meta) {
+  // вернуть прокрутку, когда закрыли экран поверх
+  const prevLen = useRef(stack.length);
+  useLayoutEffect(() => {
+    if (stack.length < prevLen.current) {
+      const y = overlayScroll.current[stack.length];
+      overlayScroll.current.length = stack.length;
+      window.scrollTo(0, y ?? 0);
+    }
+    prevLen.current = stack.length;
+  }, [stack.length]);
+
+  // Telegram BackButton
+  const hasOverlay = stack.length > 0;
+  useEffect(() => {
+    if (!hasOverlay || !backButtonSupported || !tg) return;
+    const bb = tg.BackButton;
+    bb.onClick(pop);
+    bb.show();
+    return () => {
+      bb.offClick(pop);
+      bb.hide();
+    };
+  }, [hasOverlay, pop]);
+
+  const switchTab = useCallback(
+    (t: Tab) => {
+      if (t === tab) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      haptic('select');
+      tabScroll.current[tab] = window.scrollY;
+      dropQuery('tab');
+      setVisited((v) => (v.has(t) ? v : new Set(v).add(t)));
+      setTab(t);
+    },
+    [tab],
+  );
+
+  useLayoutEffect(() => {
+    if (!stackRef.current.length) window.scrollTo(0, tabScroll.current[tab] ?? 0);
+  }, [tab]);
+
+  const openJob = useCallback((job: Job) => push({ kind: 'job', id: job.id, job }), [push]);
+  const openUser = useCallback((id: number) => push({ kind: 'user', id }), [push]);
+  const openSubs = useCallback(() => push({ kind: 'subs' }), [push]);
+  const onJobUpdated = useCallback((job: Job) => setPatches((p) => (p[job.id] === job ? p : { ...p, [job.id]: job })), []);
+
+  const switchRole = useCallback(
+    async (role: Role) => {
+      try {
+        const upd = await api.updateMe({ role });
+        haptic('success');
+        setMe(upd);
+        enterRole(role, false);
+        toast(role === 'worker' ? 'Теперь вы исполнитель: смотрите заявки и откликайтесь' : 'Теперь вы заказчик: создайте заявку');
+      } catch (e) {
+        haptic('error');
+        toast(errorText(e));
+      }
+    },
+    [enterRole, toast],
+  );
+
+  const toastEl = toastText && (
+    <div className={`toast${hasOverlay ? ' toast--low' : ''}`} role="status" onClick={() => setToastText(null)}>
+      {toastText}
+    </div>
+  );
+
+  if (!meta || !me) {
     return (
       <div className="app">
-        {metaError ? (
-          <ErrorState text={metaError} onRetry={() => setMetaAttempt((a) => a + 1)} />
+        {bootError ? (
+          <ErrorState text={bootError} onRetry={() => setBootAttempt((a) => a + 1)} />
         ) : (
           <div className="center pad-xl">
             <Spinner />
@@ -170,42 +266,126 @@ export function App() {
     );
   }
 
+  if (!me.role) {
+    return (
+      <div className="app">
+        <Onboarding
+          me={me}
+          onDone={(u) => {
+            setMe(u);
+            if (u.role) enterRole(u.role, true);
+          }}
+        />
+        {toastEl}
+      </div>
+    );
+  }
+
+  const role = me.role;
+  const tabs = ROLE_TABS[role];
+  const shown = (t: Tab) => tabs.includes(t) && visited.has(t);
+  const on = (t: Tab) => tab === t && !hasOverlay;
+
   return (
     <div className="app">
-      {detail && <JobDetail key={detail.id} jobId={detail.id} initial={detail.job} meta={meta} onBack={closeDetail} />}
+      {stack.map((o, i) => {
+        const top = i === stack.length - 1;
+        return (
+          <div key={o.key} hidden={!top}>
+            {o.kind === 'job' && (
+              <JobDetail
+                jobId={o.id}
+                initial={o.job}
+                meta={meta}
+                me={me}
+                active={top}
+                onBack={pop}
+                onOpenUser={openUser}
+                onSwitchRole={switchRole}
+                onChanged={bump}
+                onJobUpdated={onJobUpdated}
+                toast={toast}
+              />
+            )}
+            {o.kind === 'user' && <UserProfile userId={o.id} isMe={o.id === me.id} onBack={pop} />}
+            {o.kind === 'subs' && (
+              <Subscriptions
+                meta={meta}
+                onBack={pop}
+                onGoFeed={() => {
+                  pop();
+                  switchTab('feed');
+                }}
+                toast={toast}
+              />
+            )}
+          </div>
+        );
+      })}
 
-      <div className="tabs" hidden={!!detail}>
-        <div hidden={tab !== 'feed'}>
-          <Feed
-            meta={meta}
-            filters={filters}
-            location={location}
-            locating={locating}
-            onFiltersChange={setFilters}
-            onToggleNear={toggleNear}
-            onOpenJob={openJob}
-            onSubscribed={() => setSubsVersion((v) => v + 1)}
-            toast={toast}
-          />
-        </div>
-        {visited.has('map') && (
+      <div className="tabs" hidden={hasOverlay}>
+        {shown('feed') && (
+          <div hidden={tab !== 'feed'}>
+            <Feed
+              meta={meta}
+              filters={filters}
+              location={location}
+              locating={locating}
+              patches={patches}
+              onFiltersChange={setFilters}
+              onToggleNear={toggleNear}
+              onOpenJob={openJob}
+              toast={toast}
+            />
+          </div>
+        )}
+        {shown('map') && (
           <div hidden={tab !== 'map'}>
-            <MapView meta={meta} filters={filters} location={location} active={tab === 'map' && !detail} onOpenJob={openJob} />
+            <MapView meta={meta} filters={filters} location={location} active={on('map')} onOpenJob={openJob} />
           </div>
         )}
-        {visited.has('subs') && (
-          <div hidden={tab !== 'subs'}>
-            <Subscriptions meta={meta} version={subsVersion} onGoFeed={() => switchTab('feed')} toast={toast} />
+        {shown('responses') && (
+          <div hidden={tab !== 'responses'}>
+            <MyResponses
+              meta={meta}
+              active={on('responses')}
+              version={version}
+              onOpenJob={openJob}
+              onGoFeed={() => switchTab('feed')}
+              onChanged={bump}
+              toast={toast}
+            />
           </div>
         )}
-        <TabBar tab={tab} onChange={switchTab} />
+        {shown('my') && (
+          <div hidden={tab !== 'my'}>
+            <MyJobs meta={meta} active={on('my')} version={version} onOpenJob={openJob} onCreate={() => switchTab('create')} />
+          </div>
+        )}
+        {shown('create') && (
+          <div hidden={tab !== 'create'}>
+            <CreateJob
+              meta={meta}
+              active={on('create')}
+              toast={toast}
+              onCreated={(job) => {
+                bump();
+                tabScroll.current.create = 0;
+                switchTab('my');
+                push({ kind: 'job', id: job.id, job }, 0);
+              }}
+            />
+          </div>
+        )}
+        {shown('profile') && (
+          <div hidden={tab !== 'profile'}>
+            <Profile me={me} onMeChange={setMe} onSwitchRole={switchRole} onOpenUser={openUser} onOpenSubs={openSubs} toast={toast} />
+          </div>
+        )}
+        <TabBar tabs={tabs} tab={tab} onChange={switchTab} />
       </div>
 
-      {toastText && (
-        <div className="toast" role="status" onClick={() => setToastText(null)}>
-          {toastText}
-        </div>
-      )}
+      {toastEl}
     </div>
   );
 }

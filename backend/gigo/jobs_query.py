@@ -1,20 +1,37 @@
-"""Выборка заказов для API и бота: один SQL на ленту, карту и карточку."""
+"""SQL для заявок и откликов: один источник для ленты, карты, карточки и списков «мои»."""
 
 from dataclasses import dataclass, field
 
-JOB_COLUMNS = """
-    j.id, j.category, j.title, j.workers_needed, j.pay_amount, j.pay_unit, j.pay_per_hour, j.pay_estimated,
-    j.pay_total, j.pay_timing, j.starts_on, j.starts_at, j.duration_hours, j.address, j.description, j.phone,
-    j.first_seen_at, j.expires_at,
+
+def rating_join(alias: str, user_col: str) -> str:
+    """LATERAL с рейтингом пользователя: {alias}.rating, {alias}.reviews_count."""
+    return (f"LEFT JOIN LATERAL (SELECT round(avg(rating), 1) AS rating, count(*) AS reviews_count "
+            f"FROM reviews WHERE target_id = {user_col}) {alias} ON TRUE")
+
+
+JOB_FROM = f"""
+FROM jobs j
+JOIN users e ON e.tg_id = j.employer_id
+LEFT JOIN metro_stations m ON m.id = j.metro_id
+{rating_join("er", "j.employer_id")}
+"""
+
+
+def job_columns(viewer: str) -> str:
+    """Колонки Job; viewer: плейсхолдер с id смотрящего."""
+    return f"""
+    j.id, j.employer_id, j.status, j.category, j.title, j.description, j.workers_needed,
+    j.pay_amount, j.pay_unit, j.pay_per_hour, j.pay_estimated, j.pay_total, j.pay_timing,
+    j.starts_on, j.starts_at, j.duration_hours, j.address, j.created_at, j.expires_at,
     ST_Y(j.location::geometry) AS lat, ST_X(j.location::geometry) AS lng,
     m.id AS metro_id, m.name AS metro_name, m.line AS metro_line, m.line_color AS metro_color,
-    (SELECT coalesce(json_agg(json_build_object(
-                 'link', r.link, 'chat', coalesce(s.title, s.username), 'sent_at', r.sent_at)
-             ORDER BY r.sent_at), '[]')
-     FROM job_messages jm JOIN raw_messages r ON r.id = jm.raw_message_id
-     LEFT JOIN sources s ON s.chat_id = r.chat_id
-     WHERE jm.job_id = j.id AND r.link IS NOT NULL) AS posts
-"""
+    e.first_name AS employer_name, er.rating AS employer_rating, er.reviews_count AS employer_reviews,
+    (SELECT count(*) FILTER (WHERE r.status IN ('pending', 'accepted')) FROM responses r WHERE r.job_id = j.id)
+        AS responses_count,
+    (SELECT count(*) FILTER (WHERE r.status = 'accepted') FROM responses r WHERE r.job_id = j.id) AS accepted_count,
+    (SELECT count(*) FILTER (WHERE r.status = 'pending') FROM responses r WHERE r.job_id = j.id) AS pending_count,
+    j.employer_id = {viewer} AS is_mine
+    """
 
 
 @dataclass
@@ -32,17 +49,16 @@ class JobFilter:
     offset: int = 0
 
 
-def build(f: JobFilter, job_id: int | None = None) -> tuple[str, str, list]:
-    """Возвращает (SQL списка, SQL количества, параметры)."""
+def build_feed(f: JobFilter, viewer_id: int) -> tuple[str, str, list]:
+    """Лента открытых заявок: (SQL списка, SQL количества, параметры)."""
     params: list = []
 
     def p(value) -> str:
         params.append(value)
         return f"${len(params)}"
 
-    where = ["j.expires_at > now()", "NOT j.hidden"]
-    if job_id is not None:
-        where = [f"j.id = {p(job_id)}"]
+    viewer = p(viewer_id)
+    where = ["j.status = 'open'", "j.expires_at > now()", f"{viewer}::bigint IS NOT NULL"]
     if f.categories:
         where.append(f"j.category = ANY({p(f.categories)}::text[])")
     if f.pay_min:
@@ -51,7 +67,7 @@ def build(f: JobFilter, job_id: int | None = None) -> tuple[str, str, list]:
         where.append(f"j.metro_id = ANY({p(f.metro_ids)}::text[])")
     if f.today:
         where.append("(j.starts_on = (now() AT TIME ZONE 'Europe/Moscow')::date "
-                     "OR (j.starts_on IS NULL AND j.first_seen_at > now() - interval '12 hours'))")
+                     "OR (j.starts_on IS NULL AND j.created_at > now() - interval '12 hours'))")
     if f.with_location:
         where.append("j.location IS NOT NULL")
 
@@ -66,12 +82,37 @@ def build(f: JobFilter, job_id: int | None = None) -> tuple[str, str, list]:
             where.append(f"{point} IS NOT NULL")  # чтобы запрос количества получал те же параметры
 
     order = {
-        "distance": "distance_km NULLS LAST, j.first_seen_at DESC" if has_point else "j.last_seen_at DESC",
-        "pay": "j.pay_per_hour DESC NULLS LAST, j.last_seen_at DESC",
-    }.get(f.sort, "j.last_seen_at DESC")
+        "distance": "distance_km NULLS LAST, j.created_at DESC" if has_point else "j.created_at DESC",
+        "pay": "j.pay_per_hour DESC NULLS LAST, j.created_at DESC",
+    }.get(f.sort, "j.created_at DESC")
 
-    base = f"FROM jobs j LEFT JOIN metro_stations m ON m.id = j.metro_id WHERE {' AND '.join(where)}"
+    base = f"{JOB_FROM} WHERE {' AND '.join(where)}"
     count_sql = f"SELECT count(*) {base}"
-    list_sql = (f"SELECT {JOB_COLUMNS}, {distance} AS distance_km {base} "
+    list_sql = (f"SELECT {job_columns(viewer)}, {distance} AS distance_km {base} "
                 f"ORDER BY {order}, j.id DESC LIMIT {int(f.limit)} OFFSET {int(f.offset)}")
     return list_sql, count_sql, params
+
+
+def jobs_where(where: str, order: str = "j.created_at DESC") -> str:
+    """Заявки по условию; $1: id смотрящего, дальше параметры условия."""
+    return f"SELECT {job_columns('$1')}, NULL::float8 AS distance_km {JOB_FROM} WHERE {where} ORDER BY {order}, j.id DESC"
+
+
+def responses_where(where: str, order: str = "r.created_at DESC") -> str:
+    """Отклики по условию; $1: id смотрящего (для контакта и его отзыва), дальше параметры условия."""
+    return f"""
+    SELECT r.id, r.job_id, r.status, r.message, r.created_at, r.worker_id, j.employer_id,
+           w.first_name AS worker_name, w.username AS worker_username, w.about AS worker_about,
+           wr.rating AS worker_rating, wr.reviews_count AS worker_reviews,
+           e.first_name AS employer_name, e.username AS employer_username,
+           rv.rating AS my_rating, rv.text AS my_text
+    FROM responses r
+    JOIN jobs j ON j.id = r.job_id
+    JOIN users w ON w.tg_id = r.worker_id
+    JOIN users e ON e.tg_id = j.employer_id
+    {rating_join("wr", "r.worker_id")}
+    LEFT JOIN reviews rv ON rv.job_id = r.job_id AND rv.author_id = $1
+         AND rv.target_id = CASE WHEN j.employer_id = $1 THEN r.worker_id ELSE j.employer_id END
+    WHERE {where}
+    ORDER BY {order}, r.id DESC
+    """

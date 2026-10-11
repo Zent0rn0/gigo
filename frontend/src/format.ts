@@ -1,4 +1,4 @@
-import type { Job, PayUnit } from './types';
+import type { Job, JobResponse, PayUnit, ResponseStatus } from './types';
 
 const TZ = 'Europe/Moscow';
 
@@ -84,16 +84,14 @@ const UNIT_SUFFIX: Record<PayUnit, string> = {
   hour: '/ч',
   shift: '/смена',
   day: '/день',
-  task: ' за заказ',
-  month: '/мес',
+  task: ' за работу',
 };
 
 export const UNIT_LABEL: Record<PayUnit, string> = {
   hour: 'в час',
   shift: 'за смену',
   day: 'за день',
-  task: 'за заказ',
-  month: 'в месяц',
+  task: 'за работу',
 };
 
 /** Главная цифра оплаты: «500 ₽/ч», «≈375 ₽/ч», либо по единице объявления. */
@@ -119,19 +117,6 @@ export function formatHours(h: number): string {
   return `${v} ${plural(Math.ceil(h), ['час', 'часа', 'часов'])}`;
 }
 
-/** 79001234567 → +7 900 123-45-67 */
-export function formatPhone(digits: string): string {
-  const d = digits.replace(/\D/g, '');
-  if (d.length === 11 && (d[0] === '7' || d[0] === '8')) {
-    return `+7 ${d.slice(1, 4)} ${d.slice(4, 7)}-${d.slice(7, 9)}-${d.slice(9)}`;
-  }
-  return `+${d}`;
-}
-
-export function telHref(digits: string): string {
-  return `tel:+${digits.replace(/\D/g, '')}`;
-}
-
 export function plural(n: number, forms: [string, string, string]): string {
   const a = Math.abs(n) % 100;
   const b = a % 10;
@@ -144,4 +129,77 @@ export function plural(n: number, forms: [string, string, string]): string {
 export function lineColor(color: string | null | undefined): string {
   if (!color) return '#9e9e9e';
   return color.startsWith('#') ? color : `#${color}`;
+}
+
+const ratingFmt = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+
+/** «★ 4,8 · 12 отзывов» или «нет отзывов». */
+export function formatRating(rating: number | null, count: number): string {
+  if (rating == null || !count) return 'нет отзывов';
+  return `★ ${ratingFmt.format(rating)} · ${count} ${plural(count, ['отзыв', 'отзыва', 'отзывов'])}`;
+}
+
+export function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? '' : dateFmt.format(d).replace('.', '');
+}
+
+/** Статус заявки с учётом срока: open, но просрочена → expired. */
+export type JobState = 'open' | 'closed' | 'cancelled' | 'expired';
+
+export function jobState(job: Pick<Job, 'status' | 'expires_at'>, now = Date.now()): JobState {
+  if (job.status === 'closed' || job.status === 'cancelled') return job.status;
+  const exp = new Date(job.expires_at).getTime();
+  if (job.status === 'open' && !Number.isNaN(exp) && exp < now) return 'expired';
+  return job.status === 'open' ? 'open' : 'closed';
+}
+
+export const JOB_STATE_LABEL: Record<JobState, string> = {
+  open: 'Идёт набор',
+  closed: 'Набор закрыт',
+  cancelled: 'Отменена',
+  expired: 'Срок вышел',
+};
+
+export const JOB_STATE_TONE: Record<JobState, Tone> = { open: 'ok', closed: 'muted', cancelled: 'bad', expired: 'muted' };
+
+export type Tone = 'ok' | 'wait' | 'bad' | 'muted';
+
+/** Как статус отклика видит исполнитель. */
+export const RESPONSE_LABEL_WORKER: Record<ResponseStatus, string> = {
+  pending: 'Ждёт ответа',
+  accepted: 'Вас выбрали',
+  rejected: 'Не выбрали',
+  withdrawn: 'Вы отозвали',
+};
+
+/** Как статус отклика видит заказчик. */
+export const RESPONSE_LABEL_OWNER: Record<ResponseStatus, string> = {
+  pending: 'Новый',
+  accepted: 'Принят',
+  rejected: 'Отклонён',
+  withdrawn: 'Отозван',
+};
+
+export const RESPONSE_TONE: Record<ResponseStatus, Tone> = { pending: 'wait', accepted: 'ok', rejected: 'bad', withdrawn: 'muted' };
+
+export function isActiveResponse(r: JobResponse | null | undefined): boolean {
+  return !!r && (r.status === 'pending' || r.status === 'accepted');
+}
+
+/**
+ * Ставка в час для подсказки в форме, как считает сервер:
+ * смена и день — на длительность, без неё за 8 часов (≈); работа — только при известной длительности.
+ */
+export function estimatePerHour(amount: number, unit: PayUnit, hours: number | null): { value: number; approx: boolean } | null {
+  if (!(amount > 0)) return null;
+  if (unit === 'hour') return { value: amount, approx: false };
+  if (unit === 'task') return hours && hours > 0 ? { value: Math.round(amount / hours), approx: true } : null;
+  if (hours && hours > 0) return { value: Math.round(amount / hours), approx: true };
+  return { value: Math.round(amount / 8), approx: true };
+}
+
+/** Первая буква имени для аватарки. */
+export function initial(name: string): string {
+  return (name.trim()[0] ?? '?').toUpperCase();
 }

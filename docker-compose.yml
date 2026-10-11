@@ -44,30 +44,7 @@ services:
       timeout: 5s
       retries: 3
 
-  # Аккаунт-сборщик: читает чаты. Вход один раз: docker compose run --rm collector python -m gigo.collector login
-  collector:
-    <<: *backend
-    command: python -m gigo.collector run
-    volumes:
-      - ./data:/app/data
-      - ./sources.txt:/app/sources.txt:ro
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-gigo}:${POSTGRES_PASSWORD:-gigo}@db:5432/${POSTGRES_DB:-gigo}
-      DATA_DIR: /app/data
-      SOURCES_FILE: /app/sources.txt
-    depends_on:
-      api:
-        condition: service_started
-
-  # Разбор объявлений ИИ
-  parser:
-    <<: *backend
-    command: python -m gigo.parser run
-    depends_on:
-      api:
-        condition: service_started
-
-  # Бот: кнопка Mini App и push по подпискам
+  # Бот: кнопка Mini App, события по откликам и новые заявки по подпискам
   bot:
     <<: *backend
     command: python -m gigo.bot

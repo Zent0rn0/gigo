@@ -31,6 +31,6 @@ async def pool(monkeypatch):
         pool = await db.connect(URL)
     except (OSError, asyncpg.PostgresError) as e:
         pytest.skip(f"база недоступна: {e}")
-    await pool.execute("TRUNCATE raw_messages, sources, jobs, users, metro_stations RESTART IDENTITY CASCADE")
+    await pool.execute("TRUNCATE users, metro_stations, geocode_cache RESTART IDENTITY CASCADE")
     yield pool
     await pool.close()

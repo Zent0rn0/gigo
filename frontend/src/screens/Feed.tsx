@@ -15,14 +15,15 @@ interface Props {
   filters: Filters;
   location: GeoPoint | null;
   locating: boolean;
+  /** Заявки, обновлённые в карточке (отклик): заменяют устаревшие из ленты. */
+  patches: Record<number, Job>;
   onFiltersChange(f: Filters): void;
   onToggleNear(): void;
   onOpenJob(job: Job): void;
-  onSubscribed(): void;
   toast(text: string): void;
 }
 
-export function Feed({ meta, filters, location, locating, onFiltersChange, onToggleNear, onOpenJob, onSubscribed, toast }: Props) {
+export function Feed({ meta, filters, location, locating, patches, onFiltersChange, onToggleNear, onOpenJob, toast }: Props) {
   const [items, setItems] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -100,12 +101,11 @@ export function Feed({ meta, filters, location, locating, onFiltersChange, onTog
     try {
       await api.createSubscription(subscriptionBody(filters, meta, location));
       haptic('success');
-      toast('Готово! Новые заказы по этому фильтру пришлёт бот.');
+      toast('Готово! Новые такие заявки пришлёт бот. Подписки — в профиле.');
       setSubscribedKeys((s) => new Set(s).add(filterKey));
-      onSubscribed();
     } catch (e) {
       haptic('error');
-      toast(e instanceof ApiError && e.status === 409 ? 'Не больше 10 подписок. Удалите ненужную во вкладке «Подписки».' : errorText(e));
+      toast(e instanceof ApiError && e.status === 409 ? 'Не больше 10 подписок. Удалите ненужную: Профиль → Подписки.' : errorText(e));
     } finally {
       setSubscribing(false);
     }
@@ -126,14 +126,14 @@ export function Feed({ meta, filters, location, locating, onFiltersChange, onTog
 
       <div className="results-bar">
         <span className="hint">
-          {status === 'ready' ? `${total} ${plural(total, ['заказ', 'заказа', 'заказов'])}` : waitingLocation ? 'Ищем вас на карте…' : 'Загружаем…'}
+          {status === 'ready' ? `${total} ${plural(total, ['заявка', 'заявки', 'заявок'])}` : waitingLocation ? 'Ищем вас на карте…' : 'Загружаем…'}
           {filters.nearMe && location && status === 'ready' ? ' · ближе сверху' : ''}
         </span>
         {alreadySubscribed ? (
           <span className="hint">✓ Вы подписаны</span>
         ) : (
           <button type="button" className="link-btn" onClick={subscribe} disabled={subscribing}>
-            🔔 {subscribing ? 'Подписываем…' : 'Подписаться на этот фильтр'}
+            🔔 {subscribing ? 'Подписываем…' : 'Подписаться на такие заявки'}
           </button>
         )}
       </div>
@@ -152,11 +152,11 @@ export function Feed({ meta, filters, location, locating, onFiltersChange, onTog
       {status === 'ready' && items.length === 0 && (
         <EmptyState
           icon="🔍"
-          title="Заказов не нашлось"
+          title="Заявок не нашлось"
           text={
             isEmptyFilter(filters)
-              ? 'Сейчас нет активных заказов. Загляните чуть позже или подпишитесь — бот пришлёт новые.'
-              : 'Попробуйте смягчить фильтр или подпишитесь: бот пришлёт, когда появится подходящий заказ.'
+              ? 'Сейчас открытых заявок нет. Загляните позже или подпишитесь — бот пришлёт новые.'
+              : 'Попробуйте смягчить фильтр или подпишитесь: бот пришлёт, когда появится подходящая заявка.'
           }
           action={
             !isEmptyFilter(filters) && (
@@ -171,7 +171,7 @@ export function Feed({ meta, filters, location, locating, onFiltersChange, onTog
       {status === 'ready' && items.length > 0 && (
         <div className="list">
           {items.map((j) => (
-            <JobCard key={j.id} job={j} category={catById.get(j.category)} onOpen={onOpenJob} />
+            <JobCard key={j.id} job={patches[j.id] ?? j} category={catById.get(j.category)} onOpen={onOpenJob} />
           ))}
           <div ref={sentinel} />
           {items.length < total && (
@@ -185,7 +185,7 @@ export function Feed({ meta, filters, location, locating, onFiltersChange, onTog
               )}
             </div>
           )}
-          {items.length >= total && total > PAGE && <div className="hint center pad">Это все заказы</div>}
+          {items.length >= total && total > PAGE && <div className="hint center pad">Это все заявки</div>}
         </div>
       )}
     </div>

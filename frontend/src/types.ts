@@ -1,25 +1,25 @@
 // Типы по контракту docs/api.md
 
-export type CategoryId =
-  | 'loader'
-  | 'courier'
-  | 'warehouse'
-  | 'cleaning'
-  | 'construction'
-  | 'promo'
-  | 'kitchen'
-  | 'driver'
-  | 'event'
-  | 'other';
+export type Role = 'worker' | 'employer';
 
-export type PayUnit = 'hour' | 'shift' | 'day' | 'task' | 'month';
+export type PayUnit = 'hour' | 'shift' | 'day' | 'task';
 
 export type JobSort = 'fresh' | 'distance' | 'pay';
+
+/** Сервер присылает open | closed | cancelled; на всякий случай терпим и другое значение. */
+export type JobStatus = 'open' | 'closed' | 'cancelled';
+
+export type ResponseStatus = 'pending' | 'accepted' | 'rejected' | 'withdrawn';
 
 export interface Category {
   id: string;
   label: string;
   emoji: string;
+}
+
+export interface PayUnitOption {
+  id: PayUnit;
+  label: string;
 }
 
 export interface MetroStation {
@@ -40,8 +40,60 @@ export interface City {
 
 export interface Meta {
   categories: Category[];
+  pay_units: PayUnitOption[];
   metro: MetroStation[];
   city: City;
+}
+
+export interface Me {
+  id: number;
+  username: string | null;
+  first_name: string;
+  role: Role | null;
+  about: string | null;
+  rating: number | null;
+  reviews_count: number;
+}
+
+export interface MePatch {
+  role?: Role;
+  about?: string;
+}
+
+/** Короткая карточка второй стороны (заказчик в Job, исполнитель в Response). */
+export interface UserStub {
+  id: number;
+  first_name: string;
+  about?: string | null;
+  rating: number | null;
+  reviews_count: number;
+}
+
+export interface Contact {
+  first_name: string;
+  username: string | null;
+  url: string;
+}
+
+export interface ReviewMine {
+  rating: number;
+  text: string | null;
+}
+
+export interface JobResponse {
+  id: number;
+  job_id: number;
+  status: ResponseStatus;
+  message: string | null;
+  created_at: string;
+  worker: UserStub;
+  contact: Contact | null;
+  my_review: ReviewMine | null;
+}
+
+/** Элемент GET /api/my/responses. */
+export interface MyResponse extends JobResponse {
+  job: Job;
 }
 
 export interface JobMetro {
@@ -51,16 +103,12 @@ export interface JobMetro {
   color: string | null;
 }
 
-export interface JobPost {
-  link: string;
-  chat: string | null;
-  sent_at: string | null;
-}
-
 export interface Job {
   id: number;
+  status: JobStatus;
   category: string;
   title: string;
+  description: string | null;
   workers_needed: number | null;
   pay_amount: number | null;
   pay_unit: PayUnit | null;
@@ -76,11 +124,35 @@ export interface Job {
   lat: number | null;
   lng: number | null;
   distance_km: number | null;
-  description: string | null;
-  phone: string | null; // цифры без «+», например 79001234567
-  posts: JobPost[];
-  first_seen_at: string;
+  employer: UserStub;
+  responses_count: number;
+  accepted_count: number;
+  is_mine: boolean;
+  my_response: JobResponse | null;
+  created_at: string;
   expires_at: string;
+  /** Только автору в GET /api/jobs/{id}. */
+  responses?: JobResponse[];
+  /** Только в GET /api/my/jobs. */
+  pending_count?: number;
+}
+
+/** Тело POST /api/jobs. */
+export interface JobIn {
+  category: string;
+  title: string;
+  description?: string | null;
+  workers_needed?: number | null;
+  pay_amount: number;
+  pay_unit: PayUnit;
+  pay_timing?: string | null;
+  starts_on?: string | null;
+  start_time?: string | null; // HH:MM
+  duration_hours?: number | null;
+  metro_id?: string | null;
+  address?: string | null;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 export interface JobsPage {
@@ -100,6 +172,31 @@ export interface JobsQuery {
   with_location?: boolean;
   limit?: number;
   offset?: number;
+}
+
+export interface PublicReview {
+  rating: number;
+  text: string | null;
+  author: { id: number; first_name: string };
+  job_title: string | null;
+  created_at: string;
+}
+
+export interface UserProfile {
+  id: number;
+  first_name: string;
+  role: Role | null;
+  about: string | null;
+  rating: number | null;
+  reviews_count: number;
+  jobs_count: number;
+  reviews: PublicReview[];
+}
+
+export interface ReviewIn {
+  response_id: number;
+  rating: number;
+  text?: string | null;
 }
 
 export interface Subscription {

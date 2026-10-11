@@ -1,41 +1,66 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { MetroDot } from '../components/MetroDot';
+import { ReviewSheet, type ReviewTarget } from '../components/ReviewSheet';
+import { Sheet } from '../components/Sheet';
+import { ConfirmButton, ContactButton, StatusChip, UserRow } from '../components/ui';
 import {
+  JOB_STATE_LABEL,
+  JOB_STATE_TONE,
+  RESPONSE_LABEL_OWNER,
+  RESPONSE_LABEL_WORKER,
+  RESPONSE_TONE,
   UNIT_LABEL,
   formatAge,
   formatDistance,
   formatHours,
   formatPay,
   formatPayTotal,
-  formatPhone,
   formatUntil,
   formatWhen,
+  jobState,
   plural,
   rub,
-  telHref,
 } from '../format';
-import { backButtonSupported, haptic, openLink } from '../telegram';
-import type { Job, Meta } from '../types';
+import { useMainButton } from '../mainButton';
+import { backButtonSupported, haptic, mainButtonSupported } from '../telegram';
+import type { Job, JobResponse, JobStatus, Me, Meta, ResponseStatus, Role } from '../types';
 
 interface Props {
   jobId: number;
   initial: Job | null;
-  meta: Meta | null;
+  meta: Meta;
+  me: Me;
+  /** Экран сверху стека (видим): только тогда он управляет MainButton. */
+  active: boolean;
   onBack(): void;
+  onOpenUser(id: number): void;
+  onSwitchRole(role: Role): void;
+  /** Что-то поменялось: списки «Мои заявки» / «Отклики» перезагрузятся. */
+  onChanged(): void;
+  /** Свежая версия заявки, чтобы лента показала «Вы откликнулись». */
+  onJobUpdated(job: Job): void;
+  toast(text: string): void;
 }
 
-export function JobDetail({ jobId, initial, meta, onBack }: Props) {
+export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser, onSwitchRole, onChanged, onJobUpdated, toast }: Props) {
   const [job, setJob] = useState<Job | null>(initial);
   const [status, setStatus] = useState<'loading' | 'ready' | 'notfound' | 'error'>(initial ? 'ready' : 'loading');
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
 
+  const [respondOpen, setRespondOpen] = useState(false);
+  const [message, setMessage] = useState('');
+  const [busy, setBusy] = useState<string | null>(null);
+  const [respondError, setRespondError] = useState('');
+  const [review, setReview] = useState<ReviewTarget | null>(null);
+
+  // Карточку из списка показываем сразу и тихо обновляем: у автора догрузятся отклики, у исполнителя — свежий my_response.
   useEffect(() => {
-    if (initial && attempt === 0) return;
     let alive = true;
-    setStatus('loading');
+    const soft = !!initial && attempt === 0;
+    if (!soft) setStatus('loading');
     api
       .job(jobId)
       .then((j) => {
@@ -45,6 +70,7 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
       })
       .catch((e) => {
         if (!alive) return;
+        if (soft) return; // показываем то, что уже есть
         if (e instanceof ApiError && e.status === 404) setStatus('notfound');
         else {
           setError(errorText(e));
@@ -54,11 +80,122 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
     return () => {
       alive = false;
     };
-  }, [jobId, initial, attempt]);
+  }, [jobId, attempt]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [jobId]);
+
+  useEffect(() => {
+    if (job) onJobUpdated(job);
+  }, [job, onJobUpdated]);
+
+  const reload = useCallback(() => {
+    api
+      .job(jobId)
+      .then(setJob)
+      .catch(() => {
+        /* оставим как есть */
+      });
+  }, [jobId]);
+
+  const isOwner = !!job?.is_mine;
+  const my = job?.my_response ?? null;
+  const state = job ? jobState(job) : 'open';
+  const canRespond = !!job && !isOwner && me.role === 'worker' && state === 'open' && (!my || my.status === 'withdrawn');
+
+  const submitResponse = async () => {
+    if (!job || busy) return;
+    setBusy('respond');
+    setRespondError('');
+    try {
+      const r = await api.respond(job.id, message.trim() || null);
+      haptic('success');
+      setJob({ ...job, my_response: r, responses_count: job.responses_count + (my ? 0 : 1) });
+      setRespondOpen(false);
+      setMessage('');
+      toast('Отклик отправлен. Заказчик получит уведомление в Telegram.');
+      onChanged();
+    } catch (e) {
+      haptic('error');
+      setRespondError(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  useMainButton(
+    active && job && !review
+      ? respondOpen
+        ? { text: 'Отправить отклик', onClick: submitResponse, progress: busy === 'respond' }
+        : canRespond
+          ? { text: my ? 'Откликнуться снова' : 'Откликнуться', onClick: () => setRespondOpen(true) }
+          : null
+      : null,
+  );
+
+  const withdraw = async () => {
+    if (!job || !my) return;
+    setBusy('withdraw');
+    try {
+      const r = await api.setResponseStatus(my.id, 'withdrawn');
+      haptic('success');
+      setJob({ ...job, my_response: r });
+      toast('Отклик отозван');
+      onChanged();
+    } catch (e) {
+      haptic('error');
+      toast(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const setJobStatus = async (s: JobStatus) => {
+    if (!job) return;
+    setBusy(`job-${s}`);
+    try {
+      const j = await api.setJobStatus(job.id, s);
+      haptic('success');
+      setJob({ ...j, responses: j.responses ?? job.responses });
+      toast(s === 'closed' ? 'Набор закрыт. Заявка пропала из ленты.' : s === 'cancelled' ? 'Заявка отменена' : 'Заявка снова в ленте');
+      onChanged();
+    } catch (e) {
+      haptic('error');
+      toast(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const decide = async (r: JobResponse, s: Exclude<ResponseStatus, 'pending' | 'withdrawn'>) => {
+    if (!job) return;
+    setBusy(`resp-${r.id}`);
+    try {
+      const upd = await api.setResponseStatus(r.id, s);
+      haptic('success');
+      setJob({ ...job, responses: (job.responses ?? []).map((x) => (x.id === r.id ? upd : x)) });
+      toast(s === 'accepted' ? `${r.worker.first_name} принят. Контакты пришлём вам обоим в Telegram.` : 'Отклик отклонён');
+      onChanged();
+      reload();
+    } catch (e) {
+      haptic('error');
+      toast(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const savedReview = (responseId: number, rv: { rating: number; text: string | null }) => {
+    setReview(null);
+    toast('Спасибо за отзыв!');
+    setJob((j) => {
+      if (!j) return j;
+      if (j.my_response?.id === responseId) return { ...j, my_response: { ...j.my_response, my_review: rv } };
+      return { ...j, responses: j.responses?.map((x) => (x.id === responseId ? { ...x, my_review: rv } : x)) };
+    });
+    onChanged();
+  };
 
   const backBar = !backButtonSupported && (
     <div className="topbar">
@@ -84,11 +221,11 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
         {backBar}
         <EmptyState
           icon="🕓"
-          title="Заказ уже неактуален"
-          text="Его сняли или время прошло. Посмотрите свежие заказы в ленте."
+          title="Заявка уже неактуальна"
+          text="Её закрыли или время прошло."
           action={
             <button type="button" className="btn btn--primary" onClick={onBack}>
-              К ленте
+              Назад
             </button>
           }
         />
@@ -104,16 +241,21 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
     );
   }
 
-  const cat = meta?.categories.find((c) => c.id === job.category);
+  const cat = meta.categories.find((c) => c.id === job.category);
   const pay = formatPay(job);
   const total = formatPayTotal(job);
   const when = formatWhen(job);
-  const chats = job.posts.length;
+  const unitLabel = (u: NonNullable<Job['pay_unit']>) => meta.pay_units.find((p) => p.id === u)?.label ?? UNIT_LABEL[u];
 
   const rows: [string, ReactNode][] = [];
   if (when) rows.push(['Когда', when + (job.duration_hours != null ? ` · ${formatHours(job.duration_hours)}` : '')]);
   else if (job.duration_hours != null) rows.push(['Сколько', formatHours(job.duration_hours)]);
-  if (job.workers_needed != null) rows.push(['Нужно', `${job.workers_needed} ${plural(job.workers_needed, ['человек', 'человека', 'человек'])}`]);
+  if (job.workers_needed != null)
+    rows.push([
+      'Нужно',
+      `${job.workers_needed} ${plural(job.workers_needed, ['человек', 'человека', 'человек'])}` +
+        (job.accepted_count ? ` · выбрано ${job.accepted_count}` : ''),
+    ]);
   if (job.metro)
     rows.push([
       'Метро',
@@ -127,17 +269,25 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
     ]);
   if (job.address) rows.push(['Адрес', job.address]);
   if (job.distance_km != null) rows.push(['От вас', formatDistance(job.distance_km)]);
-  if (job.pay_amount != null && job.pay_unit && job.pay_unit !== 'hour')
-    rows.push(['В объявлении', `${rub(job.pay_amount)} ${UNIT_LABEL[job.pay_unit]}`]);
+  if (job.pay_amount != null && job.pay_unit && job.pay_unit !== 'hour') rows.push(['Оплата', `${rub(job.pay_amount)} ${unitLabel(job.pay_unit)}`]);
   if (job.pay_timing) rows.push(['Выплата', job.pay_timing]);
-  if (job.phone) rows.push(['Телефон', <a href={telHref(job.phone)}>{formatPhone(job.phone)}</a>]);
+
+  const reviewFor = (r: JobResponse, name: string): ReviewTarget => ({
+    responseId: r.id,
+    name,
+    jobTitle: job.title,
+    initial: r.my_review,
+  });
 
   return (
     <div className="screen screen--detail">
       {backBar}
       <div className="detail">
         <div className="detail__cat">
-          <span aria-hidden="true">{cat?.emoji ?? '🧩'}</span> {cat?.label ?? 'Подработка'}
+          <span>
+            <span aria-hidden="true">{cat?.emoji ?? '🧩'}</span> {cat?.label ?? 'Подработка'}
+          </span>
+          {(isOwner || state !== 'open') && <StatusChip tone={JOB_STATE_TONE[state]}>{JOB_STATE_LABEL[state]}</StatusChip>}
         </div>
         <h1 className="detail__title">{job.title}</h1>
 
@@ -145,9 +295,7 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
           <span className="pay pay--big">{pay ?? 'Оплата не указана'}</span>
           {total && <span className="pay-total">{total} за всё</span>}
         </div>
-        {job.pay_estimated && job.pay_per_hour != null && (
-          <div className="hint small">≈ — ставка в час посчитана из объявления, уточните у заказчика</div>
-        )}
+        {job.pay_estimated && job.pay_per_hour != null && <div className="hint small">≈ ставка в час посчитана из оплаты за смену</div>}
 
         <dl className="facts">
           {rows.map(([k, v]) => (
@@ -165,53 +313,185 @@ export function JobDetail({ jobId, initial, meta, onBack }: Props) {
           </section>
         )}
 
-        <div className="actions">
-          {job.phone && (
-            <a className="btn btn--primary btn--wide" href={telHref(job.phone)} onClick={() => haptic('light')}>
-              📞 Позвонить
-            </a>
-          )}
-          {job.posts.length === 1 && (
-            <button
-              type="button"
-              className={`btn btn--wide ${job.phone ? 'btn--secondary' : 'btn--primary'}`}
-              onClick={() => openLink(job.posts[0].link)}
-            >
-              💬 Открыть пост
-            </button>
-          )}
-        </div>
-
-        {chats > 0 && (
+        {!isOwner && (
           <section className="section">
-            <h2 className="section__title">
-              Опубликовано в {chats} {plural(chats, ['чате', 'чатах', 'чатах'])}
-            </h2>
-            <ul className="posts">
-              {job.posts.map((p) => (
-                <li key={p.link} className="post">
-                  <div className="post__info">
-                    <div className="post__chat">{p.chat ?? p.link.replace(/^https?:\/\//, '')}</div>
-                    {p.sent_at && <div className="hint small">{formatAge(p.sent_at)}</div>}
-                  </div>
-                  {job.posts.length > 1 && (
-                    <button type="button" className="btn btn--secondary btn--sm" onClick={() => openLink(p.link)}>
-                      Открыть пост
-                    </button>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
+            <h2 className="section__title">Заказчик</h2>
+            <UserRow user={job.employer} onOpen={onOpenUser} />
+          </section>
+        )}
+
+        {/* ——— исполнитель ——— */}
+        {!isOwner && my && my.status !== 'withdrawn' && (
+          <section className="section my-response">
+            <div className="my-response__head">
+              <span>Ваш отклик</span>
+              <StatusChip tone={RESPONSE_TONE[my.status]}>{RESPONSE_LABEL_WORKER[my.status]}</StatusChip>
+            </div>
+            {my.message && <p className="quote">{my.message}</p>}
+            {my.status === 'pending' && <div className="hint small">Заказчик получил уведомление. Ответ придёт сообщением от бота.</div>}
+            {my.status === 'rejected' && <div className="hint small">Заказчик выбрал других. Посмотрите другие заявки в ленте.</div>}
+            {my.status === 'accepted' && (
+              <>
+                <div className="hint small">Договоритесь о деталях с заказчиком напрямую.</div>
+                <div className="actions">
+                  {my.contact && <ContactButton contact={my.contact} wide />}
+                  <button type="button" className="btn btn--secondary btn--wide" onClick={() => setReview(reviewFor(my, job.employer.first_name))}>
+                    {my.my_review ? `Ваш отзыв: ${'★'.repeat(my.my_review.rating)} · изменить` : '★ Оставить отзыв'}
+                  </button>
+                </div>
+              </>
+            )}
+            {(my.status === 'pending' || my.status === 'accepted') && (
+              <div className="actions">
+                <ConfirmButton
+                  label={my.status === 'accepted' ? 'Отказаться от работы' : 'Отозвать отклик'}
+                  confirm={my.status === 'accepted' ? 'Точно отказаться? Заказчик получит уведомление.' : 'Отозвать отклик?'}
+                  busy={busy === 'withdraw'}
+                  onConfirm={withdraw}
+                  className="btn btn--ghost-danger btn--wide"
+                />
+              </div>
+            )}
+          </section>
+        )}
+
+        {!isOwner && me.role === 'employer' && state === 'open' && (
+          <div className="note">
+            Откликаться могут исполнители.{' '}
+            <button type="button" className="link-btn" onClick={() => onSwitchRole('worker')}>
+              Стать исполнителем
+            </button>
+          </div>
+        )}
+
+        {canRespond && !mainButtonSupported && (
+          <div className="actions">
+            <button type="button" className="btn btn--primary btn--wide" onClick={() => setRespondOpen(true)}>
+              {my ? 'Откликнуться снова' : 'Откликнуться'}
+            </button>
+          </div>
+        )}
+
+        {/* ——— автор ——— */}
+        {isOwner && (
+          <div className="actions">
+            {state === 'open' && (
+              <>
+                <button type="button" className="btn btn--secondary btn--wide" disabled={!!busy} onClick={() => setJobStatus('closed')}>
+                  {busy === 'job-closed' ? 'Закрываем…' : '✓ Закрыть набор'}
+                </button>
+                <ConfirmButton label="Отменить заявку" confirm="Отменить заявку? Исполнители получат уведомление." onConfirm={() => setJobStatus('cancelled')} busy={!!busy} className="btn btn--ghost-danger btn--wide" />
+              </>
+            )}
+            {state === 'closed' && (
+              <>
+                <button type="button" className="btn btn--secondary btn--wide" disabled={!!busy} onClick={() => setJobStatus('open')}>
+                  {busy === 'job-open' ? 'Открываем…' : 'Открыть набор снова'}
+                </button>
+                <ConfirmButton label="Отменить заявку" confirm="Отменить заявку?" onConfirm={() => setJobStatus('cancelled')} busy={!!busy} className="btn btn--ghost-danger btn--wide" />
+              </>
+            )}
+            {state === 'cancelled' && (
+              <button type="button" className="btn btn--secondary btn--wide" disabled={!!busy} onClick={() => setJobStatus('open')}>
+                {busy === 'job-open' ? 'Открываем…' : 'Открыть снова'}
+              </button>
+            )}
+            {state === 'expired' && <div className="hint small center">Срок заявки прошёл. Создайте новую, если люди ещё нужны.</div>}
+          </div>
         )}
 
         <div className="hint small detail__foot">
-          Найдено {formatAge(job.first_seen_at)} · актуально {formatUntil(job.expires_at)}
+          Опубликована {formatAge(job.created_at)}
+          {state === 'open' ? ` · актуальна ${formatUntil(job.expires_at)}` : ''}
         </div>
-        <div className="hint small detail__warn">
-          Gigo только собирает объявления из чатов. Не платите заранее за «оформление» или «форму» и не передавайте данные карты.
-        </div>
+        {!isOwner && (
+          <div className="hint small detail__warn">Gigo не проверяет заказчиков и не берёт оплату. Не платите заранее и не сообщайте данные карты.</div>
+        )}
       </div>
+
+      {isOwner && (
+        <section className="responses">
+          <h2 className="list-title">
+            Отклики{job.responses?.length ? ` · ${job.responses.length}` : ''}
+          </h2>
+          {job.workers_needed != null && job.accepted_count >= job.workers_needed && state === 'open' && (
+            <div className="note note--accent">Вы выбрали всех, кого нужно. Закройте набор, чтобы заявка ушла из ленты.</div>
+          )}
+          {!job.responses ? (
+            <div className="center pad">
+              <Spinner />
+            </div>
+          ) : job.responses.length === 0 ? (
+            <div className="hint pad center">Пока никто не откликнулся. Мы пришлём сообщение, когда появится отклик.</div>
+          ) : (
+            <div className="list">
+              {job.responses.map((r) => (
+                <div key={r.id} className={`resp-card${r.status === 'rejected' || r.status === 'withdrawn' ? ' resp-card--dim' : ''}`}>
+                  <UserRow
+                    user={r.worker}
+                    onOpen={onOpenUser}
+                    right={<StatusChip tone={RESPONSE_TONE[r.status]}>{RESPONSE_LABEL_OWNER[r.status]}</StatusChip>}
+                  />
+                  {r.worker.about && <div className="resp-card__about">{r.worker.about}</div>}
+                  {r.message && <p className="quote">{r.message}</p>}
+                  <div className="hint small">{formatAge(r.created_at)}</div>
+                  {r.status === 'pending' && (
+                    <div className="row-gap resp-card__actions">
+                      <button type="button" className="btn btn--sm btn--secondary btn--grow" disabled={!!busy} onClick={() => decide(r, 'rejected')}>
+                        Отклонить
+                      </button>
+                      <button type="button" className="btn btn--sm btn--primary btn--grow" disabled={!!busy} onClick={() => decide(r, 'accepted')}>
+                        {busy === `resp-${r.id}` ? '…' : 'Принять'}
+                      </button>
+                    </div>
+                  )}
+                  {r.status === 'accepted' && (
+                    <div className="row-gap resp-card__actions">
+                      {r.contact && <ContactButton contact={r.contact} />}
+                      <button type="button" className="btn btn--sm btn--secondary" onClick={() => setReview(reviewFor(r, r.worker.first_name))}>
+                        {r.my_review ? `Ваш отзыв ★${r.my_review.rating}` : '★ Оставить отзыв'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {respondOpen && (
+        <Sheet
+          title="Отклик"
+          onClose={() => setRespondOpen(false)}
+          footer={
+            !mainButtonSupported && (
+              <button type="button" className="btn btn--primary btn--wide" onClick={submitResponse} disabled={busy === 'respond'}>
+                {busy === 'respond' ? 'Отправляем…' : 'Отправить отклик'}
+              </button>
+            )
+          }
+        >
+          <div className="respond-form">
+            <div className="hint small">
+              {job.employer.first_name} увидит ваше имя, рейтинг и «О себе». Контакты откроются обоим, когда вас примут.
+            </div>
+            <textarea
+              className="input textarea"
+              rows={4}
+              maxLength={500}
+              placeholder="Сообщение заказчику (необязательно): когда сможете приехать, есть ли опыт"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+            <div className="hint small right">{message.length}/500</div>
+            {!me.about && <div className="hint small">Совет: расскажите о себе в профиле, так вас выберут охотнее.</div>}
+            {respondError && <div className="form-error">{respondError}</div>}
+          </div>
+        </Sheet>
+      )}
+
+      {review && <ReviewSheet target={review} onClose={() => setReview(null)} onSaved={(rv) => savedReview(review.responseId, rv)} />}
     </div>
   );
 }

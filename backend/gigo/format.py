@@ -1,11 +1,11 @@
-"""Человеческий вид оплаты и времени: для сообщений бота."""
+"""Человеческий вид заявок, оплаты и времени: для сообщений бота."""
 
 from datetime import date, datetime
 
 from gigo.categories import CATEGORIES
-from gigo.parser.rules import MSK
+from gigo.rules import MSK
 
-_UNITS = {"hour": "ч", "shift": "смену", "day": "день", "task": "работу", "month": "мес"}
+_UNITS = {"hour": "ч", "shift": "смену", "day": "день", "task": "работу"}
 
 
 def money(value: float) -> str:
@@ -42,19 +42,19 @@ def job_message(job, metro_name: str | None, subscription: str | None = None) ->
     lines = []
     if subscription:
         lines.append(f"🔔 По подписке «{subscription}»\n")
-    lines.append(f"{emoji} <b>{_esc(job['title'])}</b>")
+    lines.append(f"{emoji} <b>{esc(job['title'])}</b>")
     pay = pay_line(job["pay_per_hour"], job["pay_estimated"], job["pay_total"], job["pay_amount"],
                    job["pay_unit"], job["pay_timing"])
     if pay:
-        lines.append(f"💰 {_esc(pay)}")
+        lines.append(f"💰 {esc(pay)}")
     where = f"м. {metro_name}" if metro_name else job["address"]
     if where:
-        lines.append(f"📍 {_esc(where)}")
+        lines.append(f"📍 {esc(where)}")
     when = when_line(job["starts_on"], job["starts_at"], job["duration_hours"])
     if when:
         lines.append(f"🕑 {when}")
     return "\n".join(lines)
 
 
-def _esc(text: str) -> str:
+def esc(text: str) -> str:
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
