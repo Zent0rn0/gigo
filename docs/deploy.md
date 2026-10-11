@@ -28,6 +28,7 @@ cp .env.example .env && nano .env
 | `DOMAIN` | `gigo.example.ru` |
 | `WEBAPP_URL` | `https://gigo.example.ru` |
 | `POSTGRES_PASSWORD` | длинный случайный пароль |
+| `ADMIN_IDS` | ваш Telegram id (модератор) |
 | `DEV_AUTH` | `0` |
 
 ## 3. Запуск

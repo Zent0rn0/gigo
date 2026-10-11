@@ -22,7 +22,7 @@ def job_columns(viewer: str) -> str:
     return f"""
     j.id, j.employer_id, j.status, j.category, j.title, j.description, j.workers_needed,
     j.pay_amount, j.pay_unit, j.pay_per_hour, j.pay_estimated, j.pay_total, j.pay_timing,
-    j.starts_on, j.starts_at, j.duration_hours, j.address, j.created_at, j.expires_at,
+    j.starts_on, j.starts_at, j.duration_hours, j.address, j.created_at, j.expires_at, j.hidden_at,
     ST_Y(j.location::geometry) AS lat, ST_X(j.location::geometry) AS lng,
     m.id AS metro_id, m.name AS metro_name, m.line AS metro_line, m.line_color AS metro_color,
     e.first_name AS employer_name, er.rating AS employer_rating, er.reviews_count AS employer_reviews,
@@ -58,7 +58,7 @@ def build_feed(f: JobFilter, viewer_id: int) -> tuple[str, str, list]:
         return f"${len(params)}"
 
     viewer = p(viewer_id)
-    where = ["j.status = 'open'", "j.expires_at > now()", f"{viewer}::bigint IS NOT NULL"]
+    where = ["j.status = 'open'", "j.expires_at > now()", "j.hidden_at IS NULL", f"{viewer}::bigint IS NOT NULL"]
     if f.categories:
         where.append(f"j.category = ANY({p(f.categories)}::text[])")
     if f.pay_min:

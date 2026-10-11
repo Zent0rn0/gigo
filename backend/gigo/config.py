@@ -22,6 +22,7 @@ class Settings:
     bot_token: str | None
     webapp_url: str | None
     dev_auth: bool
+    admin_ids: tuple[int, ...]
 
 
 def load() -> Settings:
@@ -34,4 +35,5 @@ def load() -> Settings:
         bot_token=_str("BOT_TOKEN"),
         webapp_url=_str("WEBAPP_URL"),
         dev_auth=os.getenv("DEV_AUTH", "").strip() in ("1", "true", "yes"),
+        admin_ids=tuple(int(x) for x in os.getenv("ADMIN_IDS", "").replace(" ", "").split(",") if x.isdigit()),
     )

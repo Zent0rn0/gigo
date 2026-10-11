@@ -5,6 +5,7 @@
 
 import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
@@ -12,12 +13,13 @@ from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from gigo import config, db, events, rules
+from gigo import actions, config, db, events, rules
 from gigo.api.auth import InitDataError, TgUser, validate_init_data
+from gigo.api.limits import RateLimiter, check_recent
 from gigo.categories import CATEGORIES, PAY_UNITS, SCAM_FLAGS
 from gigo.geo import Geocoder
 from gigo.jobs_query import JobFilter, build_feed, jobs_where, rating_join, responses_where
@@ -45,7 +47,27 @@ async def lifespan(app: FastAPI):
     await app.state.pool.close()
 
 
-app = FastAPI(title="Gigo", lifespan=lifespan, docs_url="/api/docs", openapi_url="/api/openapi.json")
+# Документация API открыта только в режиме разработки.
+_DEV = config.load().dev_auth
+app = FastAPI(title="Gigo", lifespan=lifespan, docs_url="/api/docs" if _DEV else None,
+              redoc_url=None, openapi_url="/api/openapi.json" if _DEV else None)
+
+mutations = RateLimiter(limit=60, window=60)
+
+
+@app.exception_handler(actions.ActionError)
+async def action_error(request: Request, e: actions.ActionError):
+    return JSONResponse({"detail": e.detail}, status_code=e.status)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    if request.url.path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
 
 
 # --- вход ---------------------------------------------------------------
@@ -56,6 +78,15 @@ class Me:
     username: str | None
     first_name: str | None
     role: str | None
+
+
+_FORWARD_HEADERS = ("x-forwarded-for", "x-real-ip", "cf-connecting-ip", "forwarded")
+
+
+def _is_local(request: Request) -> bool:
+    """Запрос пришёл с этой же машины напрямую, не через туннель или прокси."""
+    host = request.client.host if request.client else ""
+    return host in ("127.0.0.1", "::1", "localhost") and not any(h in request.headers for h in _FORWARD_HEADERS)
 
 
 async def current_user(
@@ -69,7 +100,8 @@ async def current_user(
             user = validate_init_data(authorization[4:], settings.bot_token)
         except InitDataError as e:
             raise HTTPException(401, f"Вход не подтверждён: {e}")
-    elif settings.dev_auth:
+    elif settings.dev_auth and _is_local(request):
+        # Вход без Telegram только с этой же машины: через туннель или прокси так не войти.
         uid = x_dev_user or 1
         user = TgUser(uid, f"dev{uid}", f"Разработчик {uid}")
     else:
@@ -78,9 +110,14 @@ async def current_user(
         """INSERT INTO users (tg_id, username, first_name) VALUES ($1, $2, $3)
            ON CONFLICT (tg_id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name,
                last_seen_at = now()
-           RETURNING tg_id, username, first_name, role""",
-        user.id, user.username, user.first_name,
+           RETURNING tg_id, username, first_name, role, banned_at""",
+        user.id, user.username, (user.first_name or "")[:64] or None,
     )
+    if row["banned_at"]:
+        raise HTTPException(403, "Аккаунт заблокирован за нарушение правил Gigo. "
+                                 "Если это ошибка, напишите боту.")
+    if request.method != "GET" and not mutations.hit(user.id):
+        raise HTTPException(429, "Слишком много действий подряд. Подождите минуту.")
     return Me(row["tg_id"], row["username"], row["first_name"], row["role"])
 
 
@@ -140,7 +177,7 @@ async def patch_me(request: Request, body: MeIn, user: User):
     if "role" in fields and fields["role"] is None:
         raise HTTPException(422, "Выберите роль")
     if "about" in fields:
-        fields["about"] = (fields["about"] or "").strip() or None
+        fields["about"] = _clean(fields["about"])
     if fields:
         sets = ", ".join(f"{k} = ${i}" for i, k in enumerate(fields, start=2))
         await pool(request).execute(f"UPDATE users SET {sets} WHERE tg_id = $1", user.id, *fields.values())
@@ -273,8 +310,8 @@ async def load_job(p, user: Me, job_id: int) -> dict:
     if not row:
         raise HTTPException(404, "Заявка не найдена")
     [job] = await jobs_with_my_responses(p, user, [row])
-    visible = (row["status"] == "open" and row["expires_at"] > datetime.now(timezone.utc)) \
-        or job["is_mine"] or job["my_response"]
+    visible = (row["status"] == "open" and row["expires_at"] > datetime.now(timezone.utc)
+               and row["hidden_at"] is None) or job["is_mine"] or job["my_response"]
     if not visible:
         raise HTTPException(404, "Заявка закрыта")
     if job["is_mine"]:
@@ -340,8 +377,12 @@ class JobIn(BaseModel):
     lng: float | None = Field(default=None, ge=-180, le=180)
 
 
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f\u200b-\u200f\u202a-\u202e\u2066-\u2069]")
+
+
 def _clean(s: str | None) -> str | None:
-    return (s or "").strip() or None
+    """Без управляющих символов и подмены направления текста; пустая строка → None."""
+    return _CONTROL.sub("", s or "").strip() or None
 
 
 @app.post("/api/jobs", status_code=201)
@@ -364,6 +405,8 @@ async def create_job(request: Request, body: JobIn, user: User):
     if await p.fetchval("SELECT count(*) FROM jobs WHERE employer_id = $1 AND status = 'open' AND expires_at > now()",
                         user.id) >= MAX_OPEN_JOBS:
         raise HTTPException(409, f"Открыто уже {MAX_OPEN_JOBS} заявок. Закройте ненужные, чтобы создать новую.")
+    await check_recent(p, "SELECT count(*) FROM jobs WHERE employer_id = $1 AND created_at > now() - interval '1 hour'",
+                       user.id, 5, "Не больше 5 заявок в час. Попробуйте позже.")
 
     now = datetime.now(rules.MSK)
     day = body.starts_on
@@ -414,27 +457,7 @@ class JobStatusIn(BaseModel):
 async def update_job(request: Request, job_id: int, body: JobStatusIn, user: User):
     p = pool(request)
     async with p.acquire() as conn, conn.transaction():
-        job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1 FOR UPDATE", job_id)
-        if not job or job["employer_id"] != user.id:
-            raise HTTPException(404, "Заявка не найдена")
-        if body.status == "open" and job["expires_at"] <= datetime.now(timezone.utc):
-            raise HTTPException(409, "Срок заявки прошёл. Создайте новую.")
-        if body.status != job["status"]:
-            await conn.execute("UPDATE jobs SET status = $2, updated_at = now() WHERE id = $1", job_id, body.status)
-            if body.status in ("closed", "cancelled"):
-                # Кто ждал решения, получает отказ; принятым при отмене сообщаем отдельно.
-                pending = await conn.fetch(
-                    "UPDATE responses SET status = 'rejected', updated_at = now() "
-                    "WHERE job_id = $1 AND status = 'pending' RETURNING worker_id", job_id)
-                for r in pending:
-                    if body.status == "cancelled":
-                        await events.cancelled(conn, job, r["worker_id"])
-                    else:
-                        await events.rejected(conn, job, r["worker_id"], "Набор закрыт")
-                if body.status == "cancelled":
-                    for r in await conn.fetch(
-                            "SELECT worker_id FROM responses WHERE job_id = $1 AND status = 'accepted'", job_id):
-                        await events.cancelled(conn, job, r["worker_id"])
+        await actions.set_job_status(conn, job_id, user.id, body.status)
     return await load_job(p, user, job_id)
 
 
@@ -455,8 +478,11 @@ async def respond(request: Request, job_id: int, body: ResponseIn, user: User):
             raise HTTPException(404, "Заявка не найдена")
         if job["employer_id"] == user.id:
             raise HTTPException(409, "Это ваша заявка")
-        if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc):
+        if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc) or job["hidden_at"]:
             raise HTTPException(409, "Набор на эту заявку закрыт")
+        await check_recent(conn, "SELECT count(*) FROM responses WHERE worker_id = $1 "
+                                 "AND updated_at > now() - interval '1 hour'",
+                           user.id, 30, "Слишком много откликов за час. Попробуйте позже.")
         resp_id = await conn.fetchval(
             """INSERT INTO responses (job_id, worker_id, message) VALUES ($1, $2, $3)
                ON CONFLICT (job_id, worker_id) DO UPDATE
@@ -468,7 +494,7 @@ async def respond(request: Request, job_id: int, body: ResponseIn, user: User):
         if not resp_id:
             raise HTTPException(409, "Вы уже откликнулись")
         worker = await conn.fetchrow("SELECT tg_id, first_name, username FROM users WHERE tg_id = $1", user.id)
-        await events.new_response(conn, job, worker, message)
+        await events.new_response(conn, job, worker, message, resp_id)
     [resp] = await fetch_responses(p, user.id, "r.id = $2", resp_id)
     return resp
 
@@ -481,36 +507,7 @@ class ResponseStatusIn(BaseModel):
 async def update_response(request: Request, response_id: int, body: ResponseStatusIn, user: User):
     p = pool(request)
     async with p.acquire() as conn, conn.transaction():
-        r = await conn.fetchrow("SELECT * FROM responses WHERE id = $1 FOR UPDATE", response_id)
-        job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", r["job_id"]) if r else None
-        if not r or user.id not in (r["worker_id"], job["employer_id"]):
-            raise HTTPException(404, "Отклик не найден")
-        is_owner = user.id == job["employer_id"]
-        if body.status == r["status"]:
-            pass
-        elif body.status == "withdrawn":
-            if user.id != r["worker_id"] or r["status"] not in ("pending", "accepted"):
-                raise HTTPException(409, "Этот отклик нельзя отозвать")
-            if r["status"] == "accepted":
-                worker = await conn.fetchrow("SELECT first_name FROM users WHERE tg_id = $1", user.id)
-                await events.withdrawn(conn, job, worker)
-        else:
-            if not is_owner:
-                raise HTTPException(403, "Решение по отклику принимает заказчик")
-            if r["status"] == "withdrawn":
-                raise HTTPException(409, "Исполнитель отозвал отклик")
-            if body.status == "accepted" and job["status"] != "open":
-                raise HTTPException(409, "Заявка закрыта. Откройте её снова, чтобы принять отклик.")
-            users = {u["tg_id"]: u for u in await conn.fetch(
-                "SELECT tg_id, first_name, username FROM users WHERE tg_id = ANY($1::bigint[])",
-                [r["worker_id"], job["employer_id"]])}
-            if body.status == "accepted":
-                await events.accepted(conn, job, users[r["worker_id"]], users[job["employer_id"]])
-            else:
-                await events.rejected(conn, job, r["worker_id"])
-        if body.status != r["status"]:
-            await conn.execute("UPDATE responses SET status = $2, updated_at = now() WHERE id = $1",
-                               response_id, body.status)
+        await actions.set_response_status(conn, response_id, user.id, body.status)
     [resp] = await fetch_responses(p, user.id, "r.id = $2", response_id)
     return resp
 
@@ -522,6 +519,25 @@ async def my_responses(request: Request, user: User):
     rows = await p.fetch(jobs_where("j.id = ANY($2::bigint[])"), user.id, list({r["job_id"] for r in responses}))
     jobs = {r["id"]: job_out(r) for r in rows}
     return {"items": [{**resp, "job": jobs[resp["job_id"]]} for resp in responses]}
+
+
+# --- жалобы ---------------------------------------------------------------
+
+class ReportIn(BaseModel):
+    reason: Literal["scam", "spam", "rude", "other"]
+    text: str | None = Field(default=None, max_length=500)
+
+
+@app.post("/api/jobs/{job_id}/report", status_code=204)
+async def report_job(request: Request, job_id: int, body: ReportIn, user: User):
+    p = pool(request)
+    async with p.acquire() as conn, conn.transaction():
+        await check_recent(conn, "SELECT count(*) FROM reports WHERE author_id = $1 "
+                                 "AND created_at > now() - interval '1 day'",
+                           user.id, 10, "Не больше 10 жалоб в сутки.")
+        await actions.report_job(conn, job_id, user.id, body.reason, _clean(body.text),
+                                 request.app.state.settings.admin_ids)
+    return Response(status_code=204)
 
 
 # --- отзывы ---------------------------------------------------------------
