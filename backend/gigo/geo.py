@@ -47,8 +47,11 @@ class Geocoder:
             })
             resp.raise_for_status()
             members = resp.json()["response"]["GeoObjectCollection"]["featureMember"]
+        except httpx.HTTPStatusError as e:  # в тексте исключения URL с ключом: в лог его не пишем
+            log.warning("геокодер ответил %s", e.response.status_code)
+            return None
         except (httpx.HTTPError, KeyError, ValueError) as e:
-            log.warning("геокодер: %s", e)
+            log.warning("геокодер: %s", type(e).__name__)
             return None
         if not members:
             return None
