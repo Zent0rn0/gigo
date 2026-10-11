@@ -72,7 +72,7 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
           clusterBalloonContentLayoutWidth: 260,
           clusterBalloonContentLayoutHeight: 130,
         });
-        om.objects.options.set({ preset: 'islands#dotIcon', iconColor: '#FF6B2C', hasBalloon: false });
+        om.objects.options.set({ preset: 'islands#dotIcon', iconColor: '#8A2BF7', hasBalloon: false });
         om.clusters.options.set({ preset: 'islands#invertedOrangeClusterIcons' });
         om.objects.events.add('click', (e: any) => {
           const job = jobsById.current.get(Number(e.get('objectId')));

@@ -25,6 +25,7 @@ interface TgMainButton {
   hideProgress(): void;
   onClick(cb: () => void): void;
   offClick(cb: () => void): void;
+  setParams?(params: { color?: string; text_color?: string }): void;
 }
 
 export interface TgWebApp {
@@ -132,6 +133,9 @@ export function openLink(url: string): void {
   }
   window.open(url, '_blank', 'noopener');
 }
+
+/** Фирменный фиолетовый для нативной кнопки Telegram (совпадает с --brand в styles.css). */
+export const BRAND_COLOR = '#8A2BF7';
 
 export const mainButtonSupported = inTelegram && !!tg?.MainButton;
 
