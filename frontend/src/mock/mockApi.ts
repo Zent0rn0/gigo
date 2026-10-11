@@ -1,6 +1,6 @@
 // Имитация бэкенда для VITE_MOCK=1: всё как в docs/api.md, состояние живёт в памяти до перезагрузки.
 // Пользователь мока один (ME_ID); его роль меняется через PATCH /api/me, как в настоящем приложении.
-import { ApiError } from '../api';
+import { ApiError, isBlockedError, reportBlocked } from '../api';
 import { haversineKm } from '../geo';
 import { mskDay } from '../format';
 import type {
@@ -13,6 +13,7 @@ import type {
   JobsQuery,
   Me,
   MePatch,
+  ReportReason,
   Meta,
   MyResponse,
   ResponseStatus,
@@ -26,7 +27,21 @@ import type {
 import { ME_ID, buildWorld, initialSubscriptions, m, meta, metro, msk, users, type JobRec, type ResponseRec, type UserRec } from './fixture';
 
 const delay = <T>(v: T, ms = 250) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), ms));
-const fail = (status: number, detail: string) => Promise.reject(new ApiError(status, detail));
+const fail = (status: number, detail: string) => {
+  if (isBlockedError(status, detail)) reportBlocked(detail);
+  return Promise.reject(new ApiError(status, detail));
+};
+
+/** ?mockBlocked=1 — показать экран блокировки (как при 403 «Аккаунт заблокирован…»). */
+const mockBlocked = (() => {
+  try {
+    return new URLSearchParams(window.location.search).get('mockBlocked') === '1';
+  } catch {
+    return false;
+  }
+})();
+const BLOCKED = 'Аккаунт заблокирован модератором за нарушение правил: жалобы на мошенничество.';
+const reports: { job_id: number; reason: ReportReason; text: string | null }[] = [];
 
 const world = buildWorld();
 let subs: Subscription[] = initialSubscriptions.map((s) => ({ ...s }));
@@ -132,6 +147,7 @@ export const mockApi = {
   },
 
   me(): Promise<Me> {
+    if (mockBlocked) return fail(403, BLOCKED);
     return delay(meOut(), 150);
   },
 
@@ -318,6 +334,19 @@ export const mockApi = {
       });
     }
     return delay({ rating: b.rating, text });
+  },
+
+  reportJob(id: number, reason: ReportReason, text: string | null): Promise<void> {
+    const j = jobRec(id);
+    if (!j) return fail(404, 'Заявка не найдена');
+    if (j.employer_id === ME_ID) return fail(409, 'Нельзя пожаловаться на свою заявку');
+    if (text && text.length > 500) return fail(422, 'Текст жалобы длиннее 500 знаков');
+    const old = reports.findIndex((r) => r.job_id === id);
+    if (old < 0 && reports.length >= 10) return fail(429, 'Слишком много жалоб за сутки, попробуйте завтра');
+    const rec = { job_id: id, reason, text };
+    if (old >= 0) reports[old] = rec;
+    else reports.push(rec);
+    return delay(undefined, 400);
   },
 
   user(id: number): Promise<UserProfile> {

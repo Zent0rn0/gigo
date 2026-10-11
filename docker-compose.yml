@@ -59,6 +59,8 @@ services:
       dockerfile: deploy/web.Dockerfile
       args:
         VITE_YANDEX_MAPS_KEY: ${VITE_YANDEX_MAPS_KEY:-}
+        VITE_BOT_USERNAME: ${VITE_BOT_USERNAME:-}
+        VITE_MINIAPP_NAME: ${VITE_MINIAPP_NAME:-}
     restart: unless-stopped
     environment:
       DOMAIN: ${DOMAIN:-localhost}

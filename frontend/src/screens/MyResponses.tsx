@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { api, errorText } from '../api';
-import { JobCard } from '../components/JobCard';
+import { JobCard, JobCardSkeleton } from '../components/JobCard';
+import { Icon } from '../components/Icon';
 import { ReviewSheet, type ReviewTarget } from '../components/ReviewSheet';
-import { EmptyState, ErrorState, Spinner } from '../components/States';
+import { EmptyState, ErrorState } from '../components/States';
 import { ContactButton, StatusChip } from '../components/ui';
 import { RESPONSE_LABEL_WORKER, RESPONSE_TONE } from '../format';
 import type { Job, Meta, MyResponse } from '../types';
@@ -48,6 +49,12 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
 
   const catById = useMemo(() => new Map(meta.categories.map((c) => [c.id, c])), [meta]);
   const accepted = items.filter((r) => r.status === 'accepted').length;
+  // сначала «Вас выбрали», потом ждущие ответа, потом остальные
+  const ORDER = { accepted: 0, pending: 1, rejected: 2, withdrawn: 3 } as const;
+  const sorted = items
+    .map((r, i) => ({ r, i }))
+    .sort((a, b) => ORDER[a.r.status] - ORDER[b.r.status] || a.i - b.i)
+    .map((x) => x.r);
 
   return (
     <div className="screen">
@@ -63,19 +70,22 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
       </header>
 
       {status === 'loading' && (
-        <div className="center pad-xl">
-          <Spinner />
+        <div className="list">
+          <JobCardSkeleton />
+          <JobCardSkeleton />
         </div>
       )}
       {status === 'error' && <ErrorState text={error} onRetry={() => setAttempt((a) => a + 1)} />}
 
       {status === 'ready' && items.length === 0 && (
         <EmptyState
-          icon="📨"
+          icon="inbox"
+          tone="brand"
           title="Откликов пока нет"
           text="Найдите подходящую заявку в ленте и нажмите «Откликнуться»."
           action={
             <button type="button" className="btn btn--primary" onClick={onGoFeed}>
+              <Icon name="feed" size={18} />
               Открыть ленту
             </button>
           }
@@ -84,8 +94,11 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
 
       {status === 'ready' && items.length > 0 && (
         <div className="list">
-          {items.map((r) => (
-            <div key={r.id} className={r.status === 'rejected' || r.status === 'withdrawn' ? 'dim' : undefined}>
+          {sorted.map((r) => (
+            <div
+              key={r.id}
+              className={r.status === 'accepted' ? 'stack-card stack-card--ok' : r.status === 'rejected' || r.status === 'withdrawn' ? 'dim' : undefined}
+            >
               <JobCard
                 job={r.job}
                 category={catById.get(r.job.category)}
@@ -93,7 +106,7 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
                 footer={
                   <div className="job-card__foot">
                     <StatusChip tone={RESPONSE_TONE[r.status]}>{RESPONSE_LABEL_WORKER[r.status]}</StatusChip>
-                    <span className="hint small">{r.job.employer.first_name}</span>
+                    <span className="hint small job-card__who">{r.job.employer.first_name}</span>
                   </div>
                 }
               />
@@ -105,7 +118,8 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
                     className="btn btn--sm btn--secondary"
                     onClick={() => setReview({ responseId: r.id, name: r.job.employer.first_name, jobTitle: r.job.title, initial: r.my_review })}
                   >
-                    {r.my_review ? `Ваш отзыв ★${r.my_review.rating}` : '★ Оставить отзыв'}
+                    <Icon name="star" size={16} filled={!!r.my_review} />
+                    {r.my_review ? `Ваш отзыв: ${r.my_review.rating}` : 'Оставить отзыв'}
                   </button>
                 </div>
               )}

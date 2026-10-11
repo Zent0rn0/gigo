@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, errorText } from './api';
+import { api, errorText, onBlocked } from './api';
 import { ROLE_TABS, TabBar, type Tab } from './components/TabBar';
-import { ErrorState, Spinner } from './components/States';
+import { EmptyState, ErrorState, Spinner } from './components/States';
+import { LogoMark } from './components/Logo';
 import { loadFilters, saveFilters, type Filters } from './filters';
 import { getPosition } from './geo';
 import { CreateJob } from './screens/CreateJob';
@@ -26,6 +27,13 @@ function initialTab(role: Role): Tab {
   return t && ROLE_TABS[role].includes(t) ? t : ROLE_TABS[role][0];
 }
 
+/** Подсказка, если ссылка из бота ведёт во вкладку другой роли. */
+const WRONG_ROLE_TAB: Record<string, string> = {
+  responses: 'Отклики видны в роли исполнителя. Сменить роль можно в профиле.',
+  my: 'Мои заявки видны в роли заказчика. Сменить роль можно в профиле.',
+  create: 'Создавать заявки может заказчик. Сменить роль можно в профиле.',
+};
+
 function dropQuery(...keys: string[]) {
   try {
     const url = new URL(window.location.href);
@@ -46,6 +54,8 @@ export function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [bootError, setBootError] = useState('');
   const [bootAttempt, setBootAttempt] = useState(0);
+  const [blocked, setBlocked] = useState<string | null>(null);
+  useEffect(() => onBlocked(setBlocked), []);
 
   const [tab, setTab] = useState<Tab>('feed');
   const [visited, setVisited] = useState<Set<Tab>>(() => new Set<Tab>());
@@ -89,8 +99,7 @@ export function App() {
         if (u.role) {
           enterRole(u.role, true);
           const t = deepLinkTab();
-          if (t && !ROLE_TABS[u.role].includes(t))
-            toast(t === 'responses' ? 'Отклики видны в роли исполнителя. Сменить роль можно в профиле.' : 'Мои заявки видны в роли заказчика. Сменить роль можно в профиле.');
+          if (t && !ROLE_TABS[u.role].includes(t) && WRONG_ROLE_TAB[t]) toast(WRONG_ROLE_TAB[t]);
         }
       })
       .catch((e) => setBootError(errorText(e)));
@@ -252,13 +261,34 @@ export function App() {
     </div>
   );
 
+  if (blocked) {
+    return (
+      <div className="app blocked" role="alert">
+        <EmptyState
+          icon="ban"
+          tone="danger"
+          title="Доступ ограничен"
+          text={
+            <>
+              {blocked}
+              <br />
+              <br />
+              Если считаете, что это ошибка, напишите об этом боту Gigo в чате.
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
   if (!meta || !me) {
     return (
       <div className="app">
         {bootError ? (
           <ErrorState text={bootError} onRetry={() => setBootAttempt((a) => a + 1)} />
         ) : (
-          <div className="center pad-xl">
+          <div className="boot">
+            <LogoMark size={64} />
             <Spinner />
           </div>
         )}
@@ -328,6 +358,7 @@ export function App() {
           <div hidden={tab !== 'feed'}>
             <Feed
               meta={meta}
+              active={on('feed')}
               filters={filters}
               location={location}
               locating={locating}
@@ -366,6 +397,7 @@ export function App() {
           <div hidden={tab !== 'create'}>
             <CreateJob
               meta={meta}
+              me={me}
               active={on('create')}
               toast={toast}
               onCreated={(job) => {

@@ -1,10 +1,43 @@
 import { useState, type ReactNode } from 'react';
 import { formatRating, initial, type Tone } from '../format';
+import { Icon, type IconName } from './Icon';
 import { openContact } from '../telegram';
 import type { Contact, UserStub } from '../types';
 
-export function StatusChip({ tone, children }: { tone: Tone; children: ReactNode }) {
-  return <span className={`status status--${tone}`}>{children}</span>;
+const TONE_ICON: Record<Tone, IconName | null> = { ok: 'check', wait: 'clock', bad: 'x', muted: null };
+
+/** Статус: цвет + иконка + текст (не только цвет). */
+export function StatusChip({ tone, children, icon }: { tone: Tone; children: ReactNode; icon?: IconName | null }) {
+  const i = icon === undefined ? TONE_ICON[tone] : icon;
+  return (
+    <span className={`status status--${tone}`}>
+      {i && <Icon name={i} size={14} strokeWidth={2.4} />}
+      {children}
+    </span>
+  );
+}
+
+/** Кнопка-иконка: подпись обязательна, она же подсказка и текст для скринридера. */
+export function IconButton({
+  icon,
+  label,
+  onClick,
+  className = '',
+  disabled,
+  spin,
+}: {
+  icon: IconName;
+  label: string;
+  onClick(): void;
+  className?: string;
+  disabled?: boolean;
+  spin?: boolean;
+}) {
+  return (
+    <button type="button" className={`icon-btn ${className}`} onClick={onClick} aria-label={label} title={label} disabled={disabled}>
+      <Icon name={icon} size={20} className={spin ? 'spin' : undefined} />
+    </button>
+  );
 }
 
 export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
@@ -12,7 +45,7 @@ export function Avatar({ name, size = 40 }: { name: string; size?: number }) {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return (
-    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.42, background: `hsl(${h} 55% 55%)` }} aria-hidden="true">
+    <span className="avatar" style={{ width: size, height: size, fontSize: size * 0.42, background: `hsl(${h} 50% 44%)` }} aria-hidden="true">
       {initial(name)}
     </span>
   );
@@ -25,9 +58,9 @@ export function UserRow({ user, caption, onOpen, right }: { user: UserStub; capt
       <Avatar name={user.first_name} />
       <span className="user-row__text">
         <span className="user-row__name">{user.first_name}</span>
-        <span className="hint small">
+        <span className="hint small user-row__rating">
           {caption ? `${caption} · ` : ''}
-          {formatRating(user.rating, user.reviews_count)}
+          <RatingText rating={user.rating} count={user.reviews_count} />
         </span>
       </span>
     </>
@@ -37,9 +70,7 @@ export function UserRow({ user, caption, onOpen, right }: { user: UserStub; capt
       {onOpen ? (
         <button type="button" className="user-row__main" onClick={() => onOpen(user.id)}>
           {body}
-          <span className="user-row__chev" aria-hidden="true">
-            ›
-          </span>
+          <Icon name="chevron-right" size={20} className="user-row__chev" />
         </button>
       ) : (
         <div className="user-row__main">{body}</div>
@@ -57,8 +88,22 @@ export function ContactButton({ contact, wide }: { contact: Contact; wide?: bool
       title={contact.username ? `@${contact.username}` : contact.first_name}
       onClick={() => openContact(contact.url)}
     >
-      💬 Написать{wide ? ` ${contact.username ? `@${contact.username}` : contact.first_name}` : ''}
+      <Icon name="message" size={18} />
+      Написать{wide ? ` ${contact.username ? `@${contact.username}` : contact.first_name}` : ''}
     </button>
+  );
+}
+
+const STAR_SIZE = { sm: 14, md: 18, lg: 36 } as const;
+
+/** «★ 4,8 · 12 отзывов» со звездой-иконкой; без отзывов — «нет отзывов». */
+export function RatingText({ rating, count }: { rating: number | null; count: number }) {
+  if (rating == null || !count) return <>нет отзывов</>;
+  return (
+    <span className="rating">
+      <Icon name="star" filled size={13} strokeWidth={1.4} className="rating__star" />
+      {formatRating(rating, count).replace(/^★ /, '')}
+    </span>
   );
 }
 
@@ -76,11 +121,11 @@ export function Stars({ value, onChange, size = 'md' }: { value: number; onChang
             className={`star${n <= value ? ' star--on' : ''}`}
             onClick={() => onChange(n)}
           >
-            ★
+            <Icon name="star" filled size={STAR_SIZE[size]} strokeWidth={1.4} />
           </button>
         ) : (
           <span key={n} className={`star${n <= value ? ' star--on' : ''}`} aria-hidden="true">
-            ★
+            <Icon name="star" filled size={STAR_SIZE[size]} strokeWidth={1.4} />
           </span>
         ),
       )}

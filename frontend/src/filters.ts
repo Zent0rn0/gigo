@@ -10,7 +10,7 @@ export interface Filters {
 }
 
 export const EMPTY_FILTERS: Filters = { categories: [], payMin: null, today: false, metro: [], nearMe: false };
-export const PAY_PRESETS = [300, 400, 500, 700];
+export const PAY_PRESETS = [300, 400, 500, 700, 1000];
 /** Радиус подписки «рядом со мной». */
 export const NEAR_RADIUS_KM = 5;
 

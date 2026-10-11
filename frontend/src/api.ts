@@ -12,6 +12,7 @@ import type {
   Meta,
   MyResponse,
   ResponseStatus,
+  ReportReason,
   ReviewIn,
   ReviewMine,
   Subscription,
@@ -29,6 +30,25 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     this.status = status;
   }
+}
+
+/** Аккаунт заблокирован модератором: App показывает экран блокировки вместо приложения. */
+type BlockedListener = (detail: string) => void;
+const blockedListeners = new Set<BlockedListener>();
+
+export function onBlocked(cb: BlockedListener): () => void {
+  blockedListeners.add(cb);
+  return () => blockedListeners.delete(cb);
+}
+
+/** 403 «Аккаунт заблокирован…» отличается от 403 «не та роль» текстом detail. */
+export function isBlockedError(status: number, detail: string): boolean {
+  return status === 403 && /заблокирован/i.test(detail);
+}
+
+/** Сообщить о блокировке (из request и из мока). */
+export function reportBlocked(detail: string): void {
+  blockedListeners.forEach((cb) => cb(detail));
 }
 
 /**
@@ -78,6 +98,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     } catch {
       /* тело не JSON */
     }
+    if (isBlockedError(res.status, detail)) reportBlocked(detail);
     throw new ApiError(res.status, detail || `Ошибка ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
@@ -169,6 +190,11 @@ export const api = {
     return request<ReviewMine>('/reviews', json('POST', body));
   },
 
+  async reportJob(id: number, reason: ReportReason, text: string | null): Promise<void> {
+    if (MOCK) return (await mock()).reportJob(id, reason, text);
+    await request<void>(`/jobs/${id}/report`, json('POST', text ? { reason, text } : { reason }));
+  },
+
   async user(id: number): Promise<UserProfile> {
     if (MOCK) return (await mock()).user(id);
     return request<UserProfile>(`/users/${id}`);
@@ -194,6 +220,7 @@ export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
     if (e.status === 401) return 'Не удалось войти. Откройте приложение из бота в Telegram.';
     if (e.status === 0) return 'Нет связи с сервером. Проверьте интернет.';
+    if (e.status === 429) return e.message && !/^Ошибка \d+$/.test(e.message) ? e.message : 'Слишком много действий подряд. Попробуйте чуть позже.';
     if (e.status >= 500) return 'Сервер временно недоступен. Попробуйте ещё раз.';
     return e.message;
   }

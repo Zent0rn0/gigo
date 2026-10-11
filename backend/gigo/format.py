@@ -41,7 +41,7 @@ def job_message(job, metro_name: str | None, subscription: str | None = None) ->
     label, emoji = CATEGORIES.get(job["category"], CATEGORIES["other"])
     lines = []
     if subscription:
-        lines.append(f"🔔 По подписке «{subscription}»\n")
+        lines.append(f"🔔 По подписке «{esc(subscription)}»\n")
     lines.append(f"{emoji} <b>{esc(job['title'])}</b>")
     pay = pay_line(job["pay_per_hour"], job["pay_estimated"], job["pay_total"], job["pay_amount"],
                    job["pay_unit"], job["pay_timing"])

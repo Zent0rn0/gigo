@@ -1,16 +1,19 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, errorText } from '../api';
+import { Icon, categoryIcon, type IconName } from '../components/Icon';
+import { JobCard } from '../components/JobCard';
 import { MetroPicker } from '../components/MetroPicker';
 import { MetroDot } from '../components/MetroDot';
 import { PointPicker, type Point } from '../components/PointPicker';
 import { estimatePerHour, mskDay, rub } from '../format';
 import { useMainButton } from '../mainButton';
 import { haptic, mainButtonSupported } from '../telegram';
-import type { Job, JobIn, Meta, PayUnit } from '../types';
+import type { Job, JobIn, Me, Meta, PayUnit } from '../types';
 import { YMAPS_KEY } from '../ymaps';
 
 interface Props {
   meta: Meta;
+  me: Me;
   active: boolean;
   onCreated(job: Job): void;
   toast(text: string): void;
@@ -51,6 +54,37 @@ const EMPTY: Form = {
   address: '',
   point: null,
 };
+
+/** Что запоминаем с прошлой заявки: категория, метро, единица оплаты, когда платят. */
+type Remembered = Pick<Form, 'category' | 'metroId' | 'payUnit' | 'payTiming'>;
+const LAST_KEY = 'gigo.create.last.v1';
+const UNITS: PayUnit[] = ['hour', 'shift', 'day', 'task'];
+
+function loadLast(meta: Meta): Partial<Remembered> {
+  try {
+    const v = JSON.parse(localStorage.getItem(LAST_KEY) || 'null') as Partial<Remembered> | null;
+    if (!v || typeof v !== 'object') return {};
+    const out: Partial<Remembered> = {};
+    if (typeof v.category === 'string' && meta.categories.some((c) => c.id === v.category)) out.category = v.category;
+    if (typeof v.metroId === 'string' && meta.metro.some((m) => m.id === v.metroId)) out.metroId = v.metroId;
+    if (typeof v.payUnit === 'string' && UNITS.includes(v.payUnit)) out.payUnit = v.payUnit;
+    if (typeof v.payTiming === 'string') out.payTiming = v.payTiming.slice(0, 60);
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function saveLast(f: Form): void {
+  try {
+    const v: Remembered = { category: f.category, metroId: f.metroId, payUnit: f.payUnit, payTiming: f.payTiming };
+    localStorage.setItem(LAST_KEY, JSON.stringify(v));
+  } catch {
+    /* приватный режим */
+  }
+}
+
+const freshForm = (meta: Meta): Form => ({ ...EMPTY, ...loadLast(meta) });
 
 const TIMING_PRESETS = ['сразу', 'в конце дня', 'на следующий день'];
 const MAX_WORKERS = 50;
@@ -109,9 +143,23 @@ function toBody(f: Form): JobIn {
   };
 }
 
-export function CreateJob({ meta, active, onCreated, toast }: Props) {
-  const [form, setForm] = useState<Form>(EMPTY);
+function Section({ icon, title, children }: { icon: IconName; title: string; children: ReactNode }) {
+  return (
+    <section className="form-section">
+      <h2 className="form-section__title">
+        <Icon name={icon} size={18} />
+        {title}
+      </h2>
+      <div className="form-section__body">{children}</div>
+    </section>
+  );
+}
+
+export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
+  const [form, setForm] = useState<Form>(() => freshForm(meta));
   const [tried, setTried] = useState(false);
+  const [touched, setTouched] = useState<Set<keyof Errors>>(() => new Set());
+  const touch = (k: keyof Errors) => setTouched((t) => (t.has(k) ? t : new Set(t).add(k)));
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState('');
   const [metroOpen, setMetroOpen] = useState(false);
@@ -123,7 +171,8 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
     setServerError('');
   };
   const errors = validate(form);
-  const shown: Errors = tried ? errors : {};
+  // ошибка видна после попытки отправить или когда поле уже трогали и ушли с него
+  const shown: Errors = tried ? errors : Object.fromEntries(Object.entries(errors).filter(([k]) => touched.has(k as keyof Errors)));
   const station = form.metroId ? meta.metro.find((m) => m.id === form.metroId) : undefined;
 
   const pay = num(form.payAmount);
@@ -144,8 +193,10 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
       const job = await api.createJob(toBody(form));
       haptic('success');
       toast('Заявка опубликована. Сообщим, когда кто-то откликнется.');
-      setForm(EMPTY);
+      saveLast(form);
+      setForm(freshForm(meta));
       setTried(false);
+      setTouched(new Set());
       onCreated(job);
     } catch (e) {
       haptic('error');
@@ -159,13 +210,58 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
   useMainButton(active && !metroOpen && !pointOpen ? { text: 'Опубликовать заявку', onClick: submit, progress: busy } : null);
 
   const cls = (k: keyof Errors) => `field${shown[k] ? ' field--error' : ''}`;
-  const err = (k: keyof Errors) => shown[k] && <div className="field__error">{shown[k]}</div>;
+  const err = (k: keyof Errors) =>
+    shown[k] && (
+      <div className="field__error" role="alert">
+        <Icon name="alert" size={14} strokeWidth={2.2} />
+        {shown[k]}
+      </div>
+    );
+
+  // так заявка будет выглядеть в ленте
+  const preview = useMemo<Job | null>(() => {
+    if (form.title.trim().length < 3 || !(pay && pay > 0)) return null;
+    const day = startDay(form);
+    const hours = num(form.duration);
+    const st = station;
+    return {
+      id: 0,
+      status: 'open',
+      category: form.category ?? 'other',
+      title: form.title.trim(),
+      description: null,
+      workers_needed: form.workers,
+      pay_amount: pay,
+      pay_unit: form.payUnit,
+      pay_per_hour: est?.value ?? null,
+      pay_estimated: est?.approx && form.payUnit !== 'hour' && !hours ? true : false,
+      pay_total: form.payUnit === 'hour' ? (hours ? Math.round(pay * hours) : null) : pay,
+      pay_timing: form.payTiming || null,
+      starts_on: day,
+      starts_at: day && form.time ? `${day}T${form.time}:00+03:00` : null,
+      duration_hours: hours,
+      metro: st ? { id: st.id, name: st.name, line: st.line, color: st.color } : null,
+      address: form.address.trim() || null,
+      lat: null,
+      lng: null,
+      distance_km: null,
+      employer: { id: me.id, first_name: me.first_name, rating: me.rating, reviews_count: me.reviews_count },
+      responses_count: 0,
+      accepted_count: 0,
+      is_mine: false,
+      my_response: null,
+      created_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 864e5).toISOString(),
+    };
+  }, [form, pay, est, station, me]);
+
+  const timingCustom = TIMING_PRESETS.includes(form.payTiming) ? '' : form.payTiming;
 
   return (
     <div className="screen">
       <header className="feed-head">
         <h1 className="app-title">Новая заявка</h1>
-        <p className="hint lead">Исполнители увидят её в ленте и на карте и откликнутся.</p>
+        <p className="hint lead">Исполнители увидят её в ленте и на карте. Обычно первые отклики приходят за минуты.</p>
       </header>
 
       <form
@@ -176,223 +272,281 @@ export function CreateJob({ meta, active, onCreated, toast }: Props) {
           submit();
         }}
       >
-        <div className={cls('category')}>
-          <div className="field__label">Категория</div>
-          <div className="chips chips--wrap">
-            {meta.categories.map((c) => (
-              <button
-                key={c.id}
-                type="button"
-                className={`chip${form.category === c.id ? ' chip--on' : ''}`}
-                aria-pressed={form.category === c.id}
-                onClick={() => set({ category: c.id })}
-              >
-                <span aria-hidden="true">{c.emoji}</span> {c.label}
-              </button>
-            ))}
-          </div>
-          {err('category')}
-        </div>
-
-        <label className={cls('title')}>
-          <span className="field__label">Что нужно сделать</span>
-          <input
-            className="input"
-            maxLength={80}
-            placeholder="Например: грузчики на переезд офиса"
-            value={form.title}
-            onChange={(e) => set({ title: e.target.value })}
-          />
-          {err('title')}
-        </label>
-
-        <label className="field">
-          <span className="field__label">Подробности</span>
-          <textarea
-            className="input textarea"
-            rows={3}
-            maxLength={1000}
-            placeholder="Что делать, что взять с собой, есть ли лифт…"
-            value={form.description}
-            onChange={(e) => set({ description: e.target.value })}
-          />
-        </label>
-
-        <div className="field">
-          <span className="field__label">Сколько человек</span>
-          <div className="stepper">
-            <button type="button" className="stepper__btn" aria-label="Меньше" disabled={form.workers <= 1} onClick={() => set({ workers: form.workers - 1 })}>
-              −
-            </button>
-            <span className="stepper__value">{form.workers}</span>
-            <button
-              type="button"
-              className="stepper__btn"
-              aria-label="Больше"
-              disabled={form.workers >= MAX_WORKERS}
-              onClick={() => set({ workers: form.workers + 1 })}
-            >
-              +
-            </button>
-          </div>
-        </div>
-
-        <div className={cls('pay')}>
-          <span className="field__label">Оплата одному человеку</span>
-          <div className="row-gap">
-            <div className="input-wrap">
-              <input
-                className="input"
-                inputMode="numeric"
-                placeholder="500"
-                maxLength={7}
-                value={form.payAmount}
-                onChange={(e) => set({ payAmount: e.target.value.replace(/[^\d]/g, '') })}
-                aria-label="Сумма, ₽"
-              />
-              <span className="input-wrap__suffix">₽</span>
+        <Section icon="briefcase" title="Что за работа">
+          <div className={cls('category')}>
+            <div className="field__label" id="cat-label">
+              Категория
             </div>
-            <select className="input select" value={form.payUnit} onChange={(e) => set({ payUnit: e.target.value as PayUnit })} aria-label="За что">
-              {meta.pay_units.map((u) => (
-                <option key={u.id} value={u.id}>
-                  {u.label}
-                </option>
+            <div className="chips chips--wrap" role="radiogroup" aria-labelledby="cat-label">
+              {meta.categories.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  role="radio"
+                  className={`chip${form.category === c.id ? ' chip--on' : ''}`}
+                  aria-checked={form.category === c.id}
+                  onClick={() => {
+                    haptic('select');
+                    set({ category: c.id });
+                  }}
+                >
+                  <Icon name={categoryIcon(c.id)} size={16} />
+                  {c.label}
+                </button>
               ))}
-            </select>
-          </div>
-          {err('pay')}
-          {!shown.pay && est && (
-            <div className="field__hint">
-              {est.approx ? '≈ ' : ''}
-              {rub(est.value)}/ч
-              {(form.payUnit === 'shift' || form.payUnit === 'day') && !num(form.duration) ? ' (смену считаем за 8 часов)' : ''}
-              {' — так ставка выглядит в ленте'}
             </div>
-          )}
-          {!shown.pay && pay != null && pay > 0 && form.payUnit === 'task' && !est && (
-            <div className="field__hint">Укажите длительность, чтобы в ленте была ставка в час</div>
-          )}
-        </div>
-
-        <div className="field">
-          <span className="field__label">Когда платите</span>
-          <div className="chips chips--wrap">
-            {TIMING_PRESETS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                className={`chip chip--sm${form.payTiming === t ? ' chip--on' : ''}`}
-                onClick={() => set({ payTiming: form.payTiming === t ? '' : t })}
-              >
-                {t}
-              </button>
-            ))}
+            {err('category')}
           </div>
-          <input
-            className="input"
-            maxLength={60}
-            placeholder="или своими словами (необязательно)"
-            value={TIMING_PRESETS.includes(form.payTiming) ? '' : form.payTiming}
-            onChange={(e) => set({ payTiming: e.target.value })}
-          />
-        </div>
 
-        <div className={cls('date')}>
-          <span className="field__label">Когда</span>
-          <div className="segmented">
-            {(
-              [
-                ['today', 'Сегодня'],
-                ['tomorrow', 'Завтра'],
-                ['pick', 'Другой день'],
-              ] as const
-            ).map(([id, label]) => (
-              <button
-                key={id}
-                type="button"
-                className={`segmented__item${form.dateMode === id ? ' segmented__item--on' : ''}`}
-                onClick={() => set({ dateMode: id })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          {form.dateMode === 'pick' && (
-            <input className="input" type="date" min={mskDay(new Date())} value={form.date} onChange={(e) => set({ date: e.target.value })} aria-label="Дата" />
-          )}
-          {err('date')}
-        </div>
-
-        <div className="row-gap">
-          <label className={`${cls('time')} grow`}>
-            <span className="field__label">Начало</span>
-            <input className="input" type="time" value={form.time} onChange={(e) => set({ time: e.target.value })} />
-            {err('time')}
-          </label>
-          <label className={`${cls('duration')} grow`}>
-            <span className="field__label">Часов работы</span>
+          <label className={cls('title')}>
+            <span className="field__label">Что нужно сделать</span>
             <input
               className="input"
-              inputMode="decimal"
-              placeholder="4"
-              maxLength={4}
-              value={form.duration}
-              onChange={(e) => set({ duration: e.target.value.replace(/[^\d.,]/g, '') })}
+              maxLength={80}
+              placeholder="Например: грузчики на переезд офиса"
+              value={form.title}
+              onChange={(e) => set({ title: e.target.value })}
+              onBlur={() => touch('title')}
+              aria-invalid={!!shown.title}
             />
-            {err('duration')}
+            {err('title')}
           </label>
-        </div>
 
-        <div className={cls('place')}>
-          <span className="field__label">Где</span>
-          <button type="button" className="input picker" onClick={() => setMetroOpen(true)}>
-            {station ? (
-              <>
-                <MetroDot color={station.color} /> {station.name}
-              </>
-            ) : (
-              <span className="hint">Ⓜ️ Станция метро</span>
-            )}
-            <span className="chip__caret">▾</span>
-          </button>
-          <input
-            className="input"
-            maxLength={200}
-            placeholder="Адрес (необязательно, если указано метро)"
-            value={form.address}
-            onChange={(e) => set({ address: e.target.value })}
-          />
-          {YMAPS_KEY &&
-            (form.point ? (
-              <div className="place-point">
-                <button type="button" className="btn btn--sm" onClick={() => setPointOpen(true)}>
-                  📍 Точка на карте выбрана
-                </button>
-                <button type="button" className="icon-btn" onClick={() => set({ point: null })} aria-label="Убрать точку">
-                  ✕
-                </button>
-              </div>
-            ) : (
-              <button type="button" className="btn btn--sm" onClick={() => setPointOpen(true)}>
-                📍 Указать на карте
+          <label className="field">
+            <span className="field__label">Подробности</span>
+            <textarea
+              className="input textarea"
+              rows={3}
+              maxLength={1000}
+              placeholder="Что делать, что взять с собой, есть ли лифт, нужен ли паспорт"
+              value={form.description}
+              onChange={(e) => set({ description: e.target.value })}
+            />
+          </label>
+
+          <div className="field field--row">
+            <span className="field__label">Сколько человек</span>
+            <div className="stepper">
+              <button type="button" className="stepper__btn" aria-label="Меньше" disabled={form.workers <= 1} onClick={() => set({ workers: form.workers - 1 })}>
+                −
               </button>
-            ))}
-          {err('place')}
-        </div>
+              <span className="stepper__value" aria-live="polite">
+                {form.workers}
+              </span>
+              <button
+                type="button"
+                className="stepper__btn"
+                aria-label="Больше"
+                disabled={form.workers >= MAX_WORKERS}
+                onClick={() => set({ workers: form.workers + 1 })}
+              >
+                +
+              </button>
+            </div>
+          </div>
+        </Section>
+
+        <Section icon="ruble" title="Оплата">
+          <div className={cls('pay')}>
+            <span className="field__label">Сколько получит один человек</span>
+            <div className="row-gap">
+              <div className="input-wrap">
+                <input
+                  className="input input--pay"
+                  inputMode="numeric"
+                  placeholder="500"
+                  maxLength={7}
+                  value={form.payAmount}
+                  onChange={(e) => set({ payAmount: e.target.value.replace(/[^\d]/g, '') })}
+                  onBlur={() => touch('pay')}
+                  aria-label="Сумма, ₽"
+                  aria-invalid={!!shown.pay}
+                />
+                <span className="input-wrap__suffix">₽</span>
+              </div>
+              <select className="input select" value={form.payUnit} onChange={(e) => set({ payUnit: e.target.value as PayUnit })} aria-label="За что">
+                {meta.pay_units.map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {err('pay')}
+            {!shown.pay && est && (
+              <div className="field__hint">
+                {est.approx ? '≈ ' : ''}
+                {rub(est.value)}/ч
+                {(form.payUnit === 'shift' || form.payUnit === 'day') && !num(form.duration) ? ' (смену считаем за 8 часов)' : ''}
+                {' — так ставка выглядит в ленте'}
+              </div>
+            )}
+            {!shown.pay && pay != null && pay > 0 && form.payUnit === 'task' && !est && (
+              <div className="field__hint field__hint--muted">Укажите длительность, чтобы в ленте была ставка в час</div>
+            )}
+          </div>
+
+          <div className="field">
+            <span className="field__label">Когда платите</span>
+            <div className="chips chips--wrap">
+              {TIMING_PRESETS.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  className={`chip${form.payTiming === t ? ' chip--on' : ''}`}
+                  aria-pressed={form.payTiming === t}
+                  onClick={() => set({ payTiming: form.payTiming === t ? '' : t })}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <input
+              className="input"
+              maxLength={60}
+              placeholder="или своими словами (необязательно)"
+              aria-label="Когда платите, своими словами"
+              value={timingCustom}
+              onChange={(e) => set({ payTiming: e.target.value })}
+            />
+          </div>
+        </Section>
+
+        <Section icon="calendar" title="Когда">
+          <div className={cls('date')}>
+            <div className="segmented" role="radiogroup" aria-label="День">
+              {(
+                [
+                  ['today', 'Сегодня'],
+                  ['tomorrow', 'Завтра'],
+                  ['pick', 'Другой день'],
+                ] as const
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type="button"
+                  role="radio"
+                  aria-checked={form.dateMode === id}
+                  className={`segmented__item${form.dateMode === id ? ' segmented__item--on' : ''}`}
+                  onClick={() => set({ dateMode: id })}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            {form.dateMode === 'pick' && (
+              <input
+                className="input"
+                type="date"
+                min={mskDay(new Date())}
+                value={form.date}
+                onChange={(e) => set({ date: e.target.value })}
+                onBlur={() => touch('date')}
+                aria-label="Дата"
+              />
+            )}
+            {err('date')}
+          </div>
+
+          <div className="row-gap">
+            <label className={`${cls('time')} grow`}>
+              <span className="field__label">Начало</span>
+              <input className="input" type="time" value={form.time} onChange={(e) => set({ time: e.target.value })} onBlur={() => touch('time')} />
+              {err('time')}
+            </label>
+            <label className={`${cls('duration')} grow`}>
+              <span className="field__label">Часов работы</span>
+              <input
+                className="input"
+                inputMode="decimal"
+                placeholder="4"
+                maxLength={4}
+                value={form.duration}
+                onChange={(e) => set({ duration: e.target.value.replace(/[^\d.,]/g, '') })}
+                onBlur={() => touch('duration')}
+              />
+              {err('duration')}
+            </label>
+          </div>
+        </Section>
+
+        <Section icon="pin" title="Где">
+          <div className={cls('place')}>
+            <button type="button" className="input picker" onClick={() => setMetroOpen(true)} aria-haspopup="dialog">
+              {station ? (
+                <>
+                  <MetroDot color={station.color} /> {station.name}
+                </>
+              ) : (
+                <>
+                  <Icon name="metro" size={18} className="hint" />
+                  <span className="hint">Станция метро</span>
+                </>
+              )}
+              <Icon name="chevron-down" size={18} className="chip__caret" />
+            </button>
+            <input
+              className="input"
+              maxLength={200}
+              placeholder={station ? 'Адрес (необязательно)' : 'Адрес'}
+              aria-label="Адрес"
+              value={form.address}
+              onChange={(e) => set({ address: e.target.value })}
+              onBlur={() => touch('place')}
+            />
+            {YMAPS_KEY &&
+              (form.point ? (
+                <div className="place-point">
+                  <button type="button" className="btn btn--sm btn--secondary" onClick={() => setPointOpen(true)}>
+                    <Icon name="check" size={16} />
+                    Точка на карте выбрана
+                  </button>
+                  <button type="button" className="icon-btn" onClick={() => set({ point: null })} aria-label="Убрать точку" title="Убрать точку">
+                    <Icon name="x" size={18} />
+                  </button>
+                </div>
+              ) : (
+                <button type="button" className="btn btn--sm btn--secondary" onClick={() => setPointOpen(true)}>
+                  <Icon name="pin" size={16} />
+                  Указать на карте
+                </button>
+              ))}
+            {err('place')}
+            {!shown.place && <div className="hint small">Достаточно метро или адреса. Точный адрес можно сообщить исполнителю в чате.</div>}
+          </div>
+        </Section>
+
+        {preview && (
+          <section className="form-section form-section--preview">
+            <h2 className="form-section__title">
+              <Icon name="eye" size={18} />
+              Так заявку увидят в ленте
+            </h2>
+            <JobCard job={preview} category={meta.categories.find((c) => c.id === preview.category)} preview />
+          </section>
+        )}
 
         {serverError && (
           <div className="form-error" ref={errorRef} role="alert">
             {serverError}
           </div>
         )}
-        {tried && Object.keys(errors).length > 0 && <div className="form-error">Проверьте поля, отмеченные красным.</div>}
+        {tried && Object.keys(errors).length > 0 && (
+          <div className="form-error" role="alert">
+            Проверьте поля, отмеченные красным.
+          </div>
+        )}
 
         {!mainButtonSupported && (
-          <button type="submit" className="btn btn--primary btn--wide" disabled={busy}>
+          <button type="submit" className="btn btn--primary btn--wide btn--lg" disabled={busy}>
+            <Icon name="send" size={20} />
             {busy ? 'Публикуем…' : 'Опубликовать заявку'}
           </button>
         )}
-        <div className="hint small center">Без предоплат и «оформления»: такие заявки не пропускаем.</div>
+        <div className="hint small center form-foot">
+          <Icon name="shield" size={16} />
+          Заявки с предоплатой и «оформлением» не публикуем.
+        </div>
       </form>
 
       {pointOpen && (

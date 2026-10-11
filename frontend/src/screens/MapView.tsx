@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorText, isAbort } from '../api';
 import { EmptyState, Spinner } from '../components/States';
+import { Icon } from '../components/Icon';
 import { filtersToQuery, isEmptyFilter, type Filters } from '../filters';
 import { formatPay, formatWhen, plural } from '../format';
 import { YMAPS_KEY, loadYmaps } from '../ymaps';
@@ -22,9 +23,9 @@ export function MapView(props: Props) {
     return (
       <div className="screen">
         <EmptyState
-          icon="🗺️"
-          title="Карта появится, когда будет задан ключ Яндекс Карт"
-          text="Пока все заявки есть во вкладке «Лента»."
+          icon="map"
+          title="Карта скоро появится"
+          text="Пока все заявки есть во вкладке «Лента». Для карты нужен ключ Яндекс Карт."
         />
       </div>
     );
@@ -71,8 +72,8 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
           clusterBalloonContentLayoutWidth: 260,
           clusterBalloonContentLayoutHeight: 130,
         });
-        om.objects.options.set({ preset: 'islands#blueDotIcon', hasBalloon: false });
-        om.clusters.options.set({ preset: 'islands#invertedBlueClusterIcons' });
+        om.objects.options.set({ preset: 'islands#dotIcon', iconColor: '#FF6B2C', hasBalloon: false });
+        om.clusters.options.set({ preset: 'islands#invertedOrangeClusterIcons' });
         om.objects.events.add('click', (e: any) => {
           const job = jobsById.current.get(Number(e.get('objectId')));
           if (job) openRef.current(job);
@@ -181,6 +182,7 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
         )}
         {mapState === 'error' && (
           <span className="map-pill">
+            <Icon name="alert" size={16} />
             Карта не загрузилась.{' '}
             <button
               type="button"
@@ -208,8 +210,8 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
         {mapState === 'ready' && data.status === 'error' && <span className="map-pill">{data.error}</span>}
       </div>
       {location && mapState === 'ready' && (
-        <button type="button" className="map-me" onClick={centerOnMe} aria-label="Где я">
-          📍
+        <button type="button" className="map-me" onClick={centerOnMe} aria-label="Показать, где я" title="Где я">
+          <Icon name="locate" size={22} />
         </button>
       )}
     </div>

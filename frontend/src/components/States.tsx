@@ -1,10 +1,23 @@
 import type { ReactNode } from 'react';
+import { Icon, type IconName } from './Icon';
 
-export function EmptyState({ icon, title, text, action }: { icon: string; title: string; text?: ReactNode; action?: ReactNode }) {
+export function EmptyState({
+  icon,
+  title,
+  text,
+  action,
+  tone = 'neutral',
+}: {
+  icon: IconName;
+  title: string;
+  text?: ReactNode;
+  action?: ReactNode;
+  tone?: 'neutral' | 'danger' | 'brand';
+}) {
   return (
     <div className="state">
-      <div className="state__icon" aria-hidden="true">
-        {icon}
+      <div className={`state__icon state__icon--${tone}`}>
+        <Icon name={icon} size={30} />
       </div>
       <div className="state__title">{title}</div>
       {text && <div className="state__text">{text}</div>}
@@ -16,11 +29,13 @@ export function EmptyState({ icon, title, text, action }: { icon: string; title:
 export function ErrorState({ text, onRetry }: { text: string; onRetry(): void }) {
   return (
     <EmptyState
-      icon="⚠️"
+      icon="alert"
+      tone="danger"
       title="Не удалось загрузить"
       text={text}
       action={
         <button type="button" className="btn btn--primary" onClick={onRetry}>
+          <Icon name="refresh" size={18} />
           Повторить
         </button>
       }

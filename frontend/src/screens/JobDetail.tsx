@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { api, ApiError, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
+import { HelpSheet, type HelpTopic } from '../components/HelpSheet';
+import { Icon, type IconName } from '../components/Icon';
+import { CategoryTile } from '../components/JobCard';
 import { MetroDot } from '../components/MetroDot';
+import { ReportSheet } from '../components/ReportSheet';
 import { ReviewSheet, type ReviewTarget } from '../components/ReviewSheet';
 import { Sheet } from '../components/Sheet';
-import { ConfirmButton, ContactButton, StatusChip, UserRow } from '../components/ui';
+import { ConfirmButton, ContactButton, IconButton, StatusChip, UserRow } from '../components/ui';
 import {
   JOB_STATE_LABEL,
   JOB_STATE_TONE,
@@ -24,7 +28,7 @@ import {
   rub,
 } from '../format';
 import { useMainButton } from '../mainButton';
-import { backButtonSupported, haptic, mainButtonSupported } from '../telegram';
+import { backButtonSupported, haptic, jobShareLink, mainButtonSupported, shareText } from '../telegram';
 import type { Job, JobResponse, JobStatus, Me, Meta, ResponseStatus, Role } from '../types';
 
 interface Props {
@@ -55,6 +59,8 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   const [busy, setBusy] = useState<string | null>(null);
   const [respondError, setRespondError] = useState('');
   const [review, setReview] = useState<ReviewTarget | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [help, setHelp] = useState<HelpTopic | null>(null);
 
   // Карточку из списка показываем сразу и тихо обновляем: у автора догрузятся отклики, у исполнителя — свежий my_response.
   useEffect(() => {
@@ -125,7 +131,7 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   };
 
   useMainButton(
-    active && job && !review
+    active && job && !review && !reportOpen && !help
       ? respondOpen
         ? { text: 'Отправить отклик', onClick: submitResponse, progress: busy === 'respond' }
         : canRespond
@@ -197,18 +203,35 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
     onChanged();
   };
 
-  const backBar = !backButtonSupported && (
-    <div className="topbar">
-      <button type="button" className="link-btn topbar__back" onClick={onBack}>
-        ‹ Назад
-      </button>
-    </div>
-  );
+  const share = async () => {
+    if (!job) return;
+    const parts = [formatPay(job), job.metro ? `м. ${job.metro.name}` : job.address, formatWhen(job)].filter(Boolean);
+    const text = `${job.title}${parts.length ? ` — ${parts.join(', ')}` : ''}`;
+    const link = jobShareLink(job.id);
+    const r = await shareText(link ? `${text}. Заявка в Gigo:` : `${text}. Ищите в Gigo.`, link);
+    if (r === 'copied') toast(link ? 'Ссылка на заявку скопирована' : 'Текст заявки скопирован');
+    else if (r === 'failed') toast('Не удалось поделиться');
+  };
+
+  const backBar = (withActions: boolean) =>
+    (!backButtonSupported || withActions) && (
+      <div className="topbar">
+        {!backButtonSupported ? (
+          <button type="button" className="topbar__back" onClick={onBack}>
+            <Icon name="chevron-left" size={22} />
+            Назад
+          </button>
+        ) : (
+          <span />
+        )}
+        {withActions && <IconButton icon="share" label="Поделиться" onClick={share} />}
+      </div>
+    );
 
   if (status === 'loading' || (status === 'ready' && !job)) {
     return (
       <div className="screen screen--detail">
-        {backBar}
+        {backBar(false)}
         <div className="center pad-xl">
           <Spinner />
         </div>
@@ -218,9 +241,9 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   if (status === 'notfound') {
     return (
       <div className="screen screen--detail">
-        {backBar}
+        {backBar(false)}
         <EmptyState
-          icon="🕓"
+          icon="clock"
           title="Заявка уже неактуальна"
           text="Её закрыли или время прошло."
           action={
@@ -235,7 +258,7 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   if (status === 'error' || !job) {
     return (
       <div className="screen screen--detail">
-        {backBar}
+        {backBar(false)}
         <ErrorState text={error} onRetry={() => setAttempt((a) => a + 1)} />
       </div>
     );
@@ -247,17 +270,19 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   const when = formatWhen(job);
   const unitLabel = (u: NonNullable<Job['pay_unit']>) => meta.pay_units.find((p) => p.id === u)?.label ?? UNIT_LABEL[u];
 
-  const rows: [string, ReactNode][] = [];
-  if (when) rows.push(['Когда', when + (job.duration_hours != null ? ` · ${formatHours(job.duration_hours)}` : '')]);
-  else if (job.duration_hours != null) rows.push(['Сколько', formatHours(job.duration_hours)]);
+  const rows: [IconName, string, ReactNode][] = [];
+  if (when) rows.push(['clock', 'Когда', when + (job.duration_hours != null ? ` · ${formatHours(job.duration_hours)}` : '')]);
+  else if (job.duration_hours != null) rows.push(['clock', 'Сколько', formatHours(job.duration_hours)]);
   if (job.workers_needed != null)
     rows.push([
+      'users',
       'Нужно',
       `${job.workers_needed} ${plural(job.workers_needed, ['человек', 'человека', 'человек'])}` +
         (job.accepted_count ? ` · выбрано ${job.accepted_count}` : ''),
     ]);
   if (job.metro)
     rows.push([
+      'metro',
       'Метро',
       <>
         <span className="meta-item">
@@ -267,10 +292,10 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
         {job.metro.line && <span className="hint metro-line">{job.metro.line}</span>}
       </>,
     ]);
-  if (job.address) rows.push(['Адрес', job.address]);
-  if (job.distance_km != null) rows.push(['От вас', formatDistance(job.distance_km)]);
-  if (job.pay_amount != null && job.pay_unit && job.pay_unit !== 'hour') rows.push(['Оплата', `${rub(job.pay_amount)} ${unitLabel(job.pay_unit)}`]);
-  if (job.pay_timing) rows.push(['Выплата', job.pay_timing]);
+  if (job.address) rows.push(['pin', 'Адрес', job.address]);
+  if (job.distance_km != null) rows.push(['navigation', 'От вас', formatDistance(job.distance_km)]);
+  if (job.pay_amount != null && job.pay_unit && job.pay_unit !== 'hour') rows.push(['ruble', 'Оплата', `${rub(job.pay_amount)} ${unitLabel(job.pay_unit)}`]);
+  if (job.pay_timing) rows.push(['wallet', 'Выплата', job.pay_timing]);
 
   const reviewFor = (r: JobResponse, name: string): ReviewTarget => ({
     responseId: r.id,
@@ -280,12 +305,13 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   });
 
   return (
-    <div className="screen screen--detail">
-      {backBar}
+    <div className={`screen screen--detail${canRespond && !mainButtonSupported ? ' screen--with-action' : ''}`}>
+      {backBar(true)}
       <div className="detail">
         <div className="detail__cat">
-          <span>
-            <span aria-hidden="true">{cat?.emoji ?? '🧩'}</span> {cat?.label ?? 'Подработка'}
+          <span className="detail__cat-label">
+            <CategoryTile id={job.category} size={28} />
+            {cat?.label ?? 'Подработка'}
           </span>
           {(isOwner || state !== 'open') && <StatusChip tone={JOB_STATE_TONE[state]}>{JOB_STATE_LABEL[state]}</StatusChip>}
         </div>
@@ -295,30 +321,19 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
           <span className="pay pay--big">{pay ?? 'Оплата не указана'}</span>
           {total && <span className="pay-total">{total} за всё</span>}
         </div>
-        {job.pay_estimated && job.pay_per_hour != null && <div className="hint small">≈ ставка в час посчитана из оплаты за смену</div>}
+        {job.pay_estimated && job.pay_per_hour != null && <div className="hint small">≈ ставка в час посчитана из оплаты за смену (8 часов)</div>}
 
         <dl className="facts">
-          {rows.map(([k, v]) => (
+          {rows.map(([icon, k, v]) => (
             <div className="facts__row" key={k}>
-              <dt>{k}</dt>
+              <dt>
+                <Icon name={icon} size={18} />
+                {k}
+              </dt>
               <dd>{v}</dd>
             </div>
           ))}
         </dl>
-
-        {job.description && (
-          <section className="section">
-            <h2 className="section__title">Описание</h2>
-            <p className="detail__desc">{job.description}</p>
-          </section>
-        )}
-
-        {!isOwner && (
-          <section className="section">
-            <h2 className="section__title">Заказчик</h2>
-            <UserRow user={job.employer} onOpen={onOpenUser} />
-          </section>
-        )}
 
         {/* ——— исполнитель ——— */}
         {!isOwner && my && my.status !== 'withdrawn' && (
@@ -336,7 +351,8 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
                 <div className="actions">
                   {my.contact && <ContactButton contact={my.contact} wide />}
                   <button type="button" className="btn btn--secondary btn--wide" onClick={() => setReview(reviewFor(my, job.employer.first_name))}>
-                    {my.my_review ? `Ваш отзыв: ${'★'.repeat(my.my_review.rating)} · изменить` : '★ Оставить отзыв'}
+                    <Icon name="star" size={18} filled={!!my.my_review} />
+                    {my.my_review ? `Ваш отзыв: ${my.my_review.rating} из 5 · изменить` : 'Оставить отзыв'}
                   </button>
                 </div>
               </>
@@ -355,8 +371,37 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
           </section>
         )}
 
+        {job.description && (
+          <section className="section">
+            <h2 className="section__title">Описание</h2>
+            <p className="detail__desc">{job.description}</p>
+          </section>
+        )}
+
+        {!isOwner && (
+          <section className="section">
+            <h2 className="section__title">Заказчик</h2>
+            <div className="person-card">
+              <UserRow user={job.employer} onOpen={onOpenUser} caption="профиль и отзывы" />
+            </div>
+          </section>
+        )}
+
+        {!isOwner && me.role === 'worker' && (
+          <div className="safety-note">
+            <Icon name="shield" size={18} />
+            <span>
+              Не платите за «оформление» и не передавайте данные карт.{' '}
+              <button type="button" className="link-btn link-btn--inline" onClick={() => setHelp('safety')}>
+                Подробнее
+              </button>
+            </span>
+          </div>
+        )}
+
         {!isOwner && me.role === 'employer' && state === 'open' && (
           <div className="note">
+            <Icon name="info" size={18} />
             Откликаться могут исполнители.{' '}
             <button type="button" className="link-btn" onClick={() => onSwitchRole('worker')}>
               Стать исполнителем
@@ -365,8 +410,9 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
         )}
 
         {canRespond && !mainButtonSupported && (
-          <div className="actions">
-            <button type="button" className="btn btn--primary btn--wide" onClick={() => setRespondOpen(true)}>
+          <div className="action-bar">
+            <button type="button" className="btn btn--primary btn--wide btn--lg" onClick={() => setRespondOpen(true)}>
+              <Icon name="send" size={20} />
               {my ? 'Откликнуться снова' : 'Откликнуться'}
             </button>
           </div>
@@ -378,7 +424,8 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
             {state === 'open' && (
               <>
                 <button type="button" className="btn btn--secondary btn--wide" disabled={!!busy} onClick={() => setJobStatus('closed')}>
-                  {busy === 'job-closed' ? 'Закрываем…' : '✓ Закрыть набор'}
+                  <Icon name="check" size={18} />
+                  {busy === 'job-closed' ? 'Закрываем…' : 'Закрыть набор'}
                 </button>
                 <ConfirmButton label="Отменить заявку" confirm="Отменить заявку? Исполнители получат уведомление." onConfirm={() => setJobStatus('cancelled')} busy={!!busy} className="btn btn--ghost-danger btn--wide" />
               </>
@@ -404,10 +451,20 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
           Опубликована {formatAge(job.created_at)}
           {state === 'open' ? ` · актуальна ${formatUntil(job.expires_at)}` : ''}
         </div>
-        {!isOwner && (
-          <div className="hint small detail__warn">Gigo не проверяет заказчиков и не берёт оплату. Не платите заранее и не сообщайте данные карты.</div>
-        )}
       </div>
+
+      {!isOwner && (
+        <div className="detail-links">
+          <button type="button" className="text-btn" onClick={share}>
+            <Icon name="share" size={18} />
+            Поделиться
+          </button>
+          <button type="button" className="text-btn text-btn--danger" onClick={() => setReportOpen(true)}>
+            <Icon name="flag" size={18} />
+            Пожаловаться
+          </button>
+        </div>
+      )}
 
       {isOwner && (
         <section className="responses">
@@ -422,7 +479,7 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
               <Spinner />
             </div>
           ) : job.responses.length === 0 ? (
-            <div className="hint pad center">Пока никто не откликнулся. Мы пришлём сообщение, когда появится отклик.</div>
+            <EmptyState icon="inbox" title="Откликов пока нет" text="Бот напишет, как только кто-то откликнется. Обычно это занимает минуты." />
           ) : (
             <div className="list">
               {job.responses.map((r) => (
@@ -441,6 +498,7 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
                         Отклонить
                       </button>
                       <button type="button" className="btn btn--sm btn--primary btn--grow" disabled={!!busy} onClick={() => decide(r, 'accepted')}>
+                        <Icon name="check" size={18} />
                         {busy === `resp-${r.id}` ? '…' : 'Принять'}
                       </button>
                     </div>
@@ -449,7 +507,8 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
                     <div className="row-gap resp-card__actions">
                       {r.contact && <ContactButton contact={r.contact} />}
                       <button type="button" className="btn btn--sm btn--secondary" onClick={() => setReview(reviewFor(r, r.worker.first_name))}>
-                        {r.my_review ? `Ваш отзыв ★${r.my_review.rating}` : '★ Оставить отзыв'}
+                        <Icon name="star" size={16} filled={!!r.my_review} />
+                        {r.my_review ? `Ваш отзыв: ${r.my_review.rating}` : 'Отзыв'}
                       </button>
                     </div>
                   )}
@@ -492,6 +551,18 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
       )}
 
       {review && <ReviewSheet target={review} onClose={() => setReview(null)} onSaved={(rv) => savedReview(review.responseId, rv)} />}
+      {reportOpen && (
+        <ReportSheet
+          jobId={job.id}
+          jobTitle={job.title}
+          onClose={() => setReportOpen(false)}
+          onSent={() => {
+            setReportOpen(false);
+            toast('Жалоба отправлена. Спасибо, модераторы проверят заявку.');
+          }}
+        />
+      )}
+      {help && <HelpSheet topic={help} onClose={() => setHelp(null)} />}
     </div>
   );
 }

@@ -199,6 +199,9 @@ export interface ReviewIn {
   text?: string | null;
 }
 
+/** Причина жалобы на заявку: POST /api/jobs/{id}/report. */
+export type ReportReason = 'scam' | 'spam' | 'rude' | 'other';
+
 export interface Subscription {
   id: number;
   name: string;

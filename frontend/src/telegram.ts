@@ -42,6 +42,10 @@ export interface TgWebApp {
   openTelegramLink(url: string): void;
   showAlert?(message: string): void;
   openLink(url: string): void;
+  onEvent?(event: string, cb: () => void): void;
+  setHeaderColor?(color: string): void;
+  setBackgroundColor?(color: string): void;
+  disableVerticalSwipes?(): void;
 }
 
 declare global {
@@ -66,11 +70,34 @@ function atLeast(v: string): boolean {
   }
 }
 
+/** Светлая/тёмная тема Telegram → data-theme на <html>: от неё зависят цвета, которых нет в --tg-theme-*. */
+function applyScheme(): void {
+  try {
+    if (tg?.colorScheme) document.documentElement.dataset.theme = tg.colorScheme;
+  } catch {
+    /* ignore */
+  }
+}
+
 export function initTelegram(): void {
   if (!tg) return;
   try {
     tg.ready();
     tg.expand();
+  } catch {
+    /* старый клиент */
+  }
+  if (!inTelegram) return;
+  applyScheme();
+  try {
+    tg.onEvent?.('themeChanged', applyScheme);
+    // шапка и фон Telegram того же цвета, что и фон приложения
+    if (atLeast('6.1')) {
+      tg.setHeaderColor?.('secondary_bg_color');
+      tg.setBackgroundColor?.('secondary_bg_color');
+    }
+    // своё «потяните, чтобы обновить» в ленте: системный свайп вниз не должен сворачивать приложение
+    if (atLeast('7.7')) tg.disableVerticalSwipes?.();
   } catch {
     /* старый клиент */
   }
@@ -142,14 +169,58 @@ export function deepLinkJobId(): number | null {
   return null;
 }
 
-/** Вкладка из ?tab=responses|my или start_param «tab_responses» / «tab_my». */
-export function deepLinkTab(): 'responses' | 'my' | null {
-  const ok = (v: string | null | undefined) => (v === 'responses' || v === 'my' ? v : null);
+export type DeepTab = 'responses' | 'my' | 'create' | 'profile';
+const DEEP_TABS: readonly string[] = ['responses', 'my', 'create', 'profile'];
+
+/** Вкладка из ?tab=responses|my|create|profile или start_param «tab_responses» и т.п. */
+export function deepLinkTab(): DeepTab | null {
+  const ok = (v: string | null | undefined): DeepTab | null => (v && DEEP_TABS.includes(v) ? (v as DeepTab) : null);
   const m = /^tab_(\w+)$/.exec(startParam());
   if (m && ok(m[1])) return ok(m[1]);
   try {
     return ok(new URLSearchParams(window.location.search).get('tab'));
   } catch {
     return null;
+  }
+}
+
+const BOT = (import.meta.env.VITE_BOT_USERNAME ?? '').trim().replace(/^@/, '');
+const APP_NAME = (import.meta.env.VITE_MINIAPP_NAME ?? '').trim();
+
+/** Ссылка на заявку, которая откроет Mini App у получателя; null, если имя бота не задано. */
+export function jobShareLink(jobId: number): string | null {
+  if (!BOT) return null;
+  // С коротким именем Mini App ссылка открывает приложение сразу; без него открывает бота, и он присылает кнопку.
+  return APP_NAME ? `https://t.me/${BOT}/${APP_NAME}?startapp=job_${jobId}` : `https://t.me/${BOT}?start=job_${jobId}`;
+}
+
+/**
+ * Поделиться: в Telegram — окно выбора чата (t.me/share/url), в браузере — системное «Поделиться»,
+ * иначе текст копируется. Возвращает, что произошло, чтобы показать подсказку.
+ */
+export async function shareText(text: string, url: string | null): Promise<'shared' | 'copied' | 'failed'> {
+  haptic('light');
+  if (inTelegram && tg && url) {
+    try {
+      tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(url)}&text=${encodeURIComponent(text)}`);
+      return 'shared';
+    } catch {
+      /* ниже */
+    }
+  }
+  const full = url ? `${text}\n${url}` : text;
+  if (!inTelegram && typeof navigator.share === 'function') {
+    try {
+      await navigator.share({ text: full });
+      return 'shared';
+    } catch {
+      /* отменили или не умеет — копируем */
+    }
+  }
+  try {
+    await navigator.clipboard.writeText(full);
+    return 'copied';
+  } catch {
+    return 'failed';
   }
 }

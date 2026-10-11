@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, ApiError, errorText, isAbort } from '../api';
 import { FilterBar } from '../components/FilterBar';
+import { Icon } from '../components/Icon';
 import { JobCard, JobCardSkeleton } from '../components/JobCard';
+import { LogoMark } from '../components/Logo';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
+import { IconButton } from '../components/ui';
 import { filtersToQuery, isEmptyFilter, subscriptionBody, EMPTY_FILTERS, type Filters } from '../filters';
 import { plural } from '../format';
+import { usePullToRefresh } from '../pullToRefresh';
 import { haptic } from '../telegram';
 import type { GeoPoint, Job, Meta } from '../types';
 
@@ -12,6 +16,8 @@ const PAGE = 30;
 
 interface Props {
   meta: Meta;
+  /** Вкладка видима (для «потяните, чтобы обновить»). */
+  active: boolean;
   filters: Filters;
   location: GeoPoint | null;
   locating: boolean;
@@ -23,10 +29,11 @@ interface Props {
   toast(text: string): void;
 }
 
-export function Feed({ meta, filters, location, locating, patches, onFiltersChange, onToggleNear, onOpenJob, toast }: Props) {
+export function Feed({ meta, active, filters, location, locating, patches, onFiltersChange, onToggleNear, onOpenJob, toast }: Props) {
   const [items, setItems] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState('');
   const [moreLoading, setMoreLoading] = useState(false);
   const [moreError, setMoreError] = useState(false);
@@ -40,12 +47,17 @@ export function Feed({ meta, filters, location, locating, patches, onFiltersChan
   const query = useMemo(() => filtersToQuery(filters, location), [filters, location]);
   const queryKey = JSON.stringify(query);
   const ctrl = useRef<AbortController | null>(null);
+  // обновление без смены фильтра: список остаётся на экране, сверху — индикатор
+  const soft = useRef(false);
 
   useEffect(() => {
     ctrl.current?.abort();
     const c = new AbortController();
     ctrl.current = c;
-    setStatus('loading');
+    const isSoft = soft.current && status === 'ready';
+    soft.current = false;
+    if (isSoft) setRefreshing(true);
+    else setStatus('loading');
     setMoreError(false);
     api
       .jobs({ ...query, limit: PAGE, offset: 0 }, c.signal)
@@ -57,11 +69,25 @@ export function Feed({ meta, filters, location, locating, patches, onFiltersChan
       })
       .catch((e) => {
         if (isAbort(e) || c.signal.aborted) return;
-        setError(errorText(e));
-        setStatus('error');
-      });
+        if (isSoft) toast(errorText(e));
+        else {
+          setError(errorText(e));
+          setStatus('error');
+        }
+      })
+      .finally(() => !c.signal.aborted && setRefreshing(false));
     return () => c.abort();
+    // status читается только в момент запуска
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryKey, reloadKey]);
+
+  const refresh = useCallback(() => {
+    haptic('light');
+    soft.current = true;
+    setReloadKey((k) => k + 1);
+  }, []);
+
+  const { pull, ready: pullReady } = usePullToRefresh(refresh, active && status !== 'loading' && !refreshing);
 
   const loadMore = useCallback(() => {
     if (moreLoading || status !== 'ready' || items.length >= total) return;
@@ -113,27 +139,53 @@ export function Feed({ meta, filters, location, locating, patches, onFiltersChan
 
   const catById = useMemo(() => new Map(meta.categories.map((c) => [c.id, c])), [meta]);
   const waitingLocation = filters.nearMe && !location;
+  const showPull = pull > 0 || refreshing;
 
   return (
     <div className="screen">
-      <header className="feed-head">
-        <h1 className="app-title">
-          Подработка <span className="app-title__city">· {meta.city.name}</span>
-        </h1>
+      <header className="feed-head feed-head--row">
+        <div className="brand-title">
+          <LogoMark size={30} />
+          <h1 className="app-title">
+            Подработка <span className="app-title__city">{meta.city.name}</span>
+          </h1>
+        </div>
+        <IconButton icon="refresh" label="Обновить" onClick={refresh} disabled={status === 'loading' || refreshing} spin={refreshing} />
       </header>
 
-      <FilterBar meta={meta} filters={filters} locating={locating} onChange={onFiltersChange} onToggleNear={onToggleNear} />
+      <div className="feed-sticky">
+        <FilterBar meta={meta} filters={filters} locating={locating} onChange={onFiltersChange} onToggleNear={onToggleNear} />
+      </div>
+
+      {showPull && (
+        <div className="ptr" style={{ height: refreshing ? 44 : pull }} aria-hidden={!refreshing}>
+          {refreshing ? (
+            <Spinner />
+          ) : (
+            <span className={`ptr__icon${pullReady ? ' ptr__icon--ready' : ''}`} style={{ transform: `rotate(${pull * 3}deg)` }}>
+              <Icon name="refresh" size={20} />
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="results-bar">
-        <span className="hint">
-          {status === 'ready' ? `${total} ${plural(total, ['заявка', 'заявки', 'заявок'])}` : waitingLocation ? 'Ищем вас на карте…' : 'Загружаем…'}
-          {filters.nearMe && location && status === 'ready' ? ' · ближе сверху' : ''}
+        <span className="hint" aria-live="polite">
+          {status === 'ready'
+            ? `${total} ${plural(total, ['заявка', 'заявки', 'заявок'])}${filters.nearMe && location ? ' · ближе сверху' : ''}`
+            : waitingLocation
+              ? 'Ищем вас на карте…'
+              : 'Загружаем…'}
         </span>
         {alreadySubscribed ? (
-          <span className="hint">✓ Вы подписаны</span>
+          <span className="sub-done">
+            <Icon name="bell-check" size={16} />
+            Вы подписаны
+          </span>
         ) : (
-          <button type="button" className="link-btn" onClick={subscribe} disabled={subscribing}>
-            🔔 {subscribing ? 'Подписываем…' : 'Подписаться на такие заявки'}
+          <button type="button" className="sub-btn" onClick={subscribe} disabled={subscribing}>
+            <Icon name="bell" size={16} />
+            {subscribing ? 'Подписываем…' : isEmptyFilter(filters) ? 'Уведомлять о новых' : 'Уведомлять о таких'}
           </button>
         )}
       </div>
@@ -151,17 +203,23 @@ export function Feed({ meta, filters, location, locating, patches, onFiltersChan
 
       {status === 'ready' && items.length === 0 && (
         <EmptyState
-          icon="🔍"
-          title="Заявок не нашлось"
+          icon="search"
+          title={isEmptyFilter(filters) ? 'Пока заявок нет' : 'Под фильтр ничего нет'}
           text={
             isEmptyFilter(filters)
-              ? 'Сейчас открытых заявок нет. Загляните позже или подпишитесь — бот пришлёт новые.'
-              : 'Попробуйте смягчить фильтр или подпишитесь: бот пришлёт, когда появится подходящая заявка.'
+              ? 'Загляните чуть позже или включите уведомления — бот пришлёт новые заявки.'
+              : 'Попробуйте смягчить фильтр или включите уведомления: бот пришлёт, когда появится подходящая заявка.'
           }
           action={
-            !isEmptyFilter(filters) && (
+            !isEmptyFilter(filters) ? (
               <button type="button" className="btn btn--secondary" onClick={() => onFiltersChange(EMPTY_FILTERS)}>
+                <Icon name="x" size={18} />
                 Сбросить фильтр
+              </button>
+            ) : (
+              <button type="button" className="btn btn--secondary" onClick={refresh}>
+                <Icon name="refresh" size={18} />
+                Обновить
               </button>
             )
           }
@@ -185,7 +243,7 @@ export function Feed({ meta, filters, location, locating, patches, onFiltersChan
               )}
             </div>
           )}
-          {items.length >= total && total > PAGE && <div className="hint center pad">Это все заявки</div>}
+          {items.length >= total && total > 3 && <div className="hint center pad small">Это все заявки. Потяните вниз, чтобы обновить.</div>}
         </div>
       )}
     </div>

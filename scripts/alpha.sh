@@ -43,6 +43,13 @@ for _ in $(seq 1 60); do
 done
 
 say "2/5 Сборка Mini App"
+# Имя бота для ссылок «Поделиться»: берём у Telegram по токену, если не задано в .env.
+if ! grep -Eq '^VITE_BOT_USERNAME=.+' .env; then
+  TOKEN="$(grep -E '^BOT_TOKEN=' .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r')"
+  export VITE_BOT_USERNAME="$(curl -fs "https://api.telegram.org/bot${TOKEN}/getMe" \
+    | grep -Eo '"username":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
+  unset TOKEN
+fi
 ( cd frontend && { [ -d node_modules ] || npm ci; } && npm run build ) > "$LOGS/build.log" 2>&1 \
   || die "Сборка не удалась, подробности: $LOGS/build.log"
 

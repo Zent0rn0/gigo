@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
+import { Icon, categoryIcon } from '../components/Icon';
 import { MetroDot } from '../components/MetroDot';
 import { rub } from '../format';
 import { backButtonSupported, haptic } from '../telegram';
@@ -63,8 +64,9 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
     <div className="screen screen--detail">
       {!backButtonSupported && (
         <div className="topbar">
-          <button type="button" className="link-btn topbar__back" onClick={onBack}>
-            ‹ Назад
+          <button type="button" className="topbar__back" onClick={onBack}>
+            <Icon name="chevron-left" size={22} />
+            Назад
           </button>
         </div>
       )}
@@ -82,7 +84,8 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
 
       {status === 'ready' && subs.length === 0 && (
         <EmptyState
-          icon="🔔"
+          icon="bell"
+          tone="brand"
           title="Подписок пока нет"
           text="Настройте фильтр в ленте и нажмите «Подписаться на такие заявки»."
           action={
@@ -99,7 +102,10 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
             {subs.map((s) => (
               <div key={s.id} className={`sub-card${s.enabled ? '' : ' sub-card--off'}`}>
                 <div className="sub-card__head">
-                  <span className="sub-card__name">{s.name}</span>
+                  <span className="sub-card__name">
+                    <Icon name="bell" size={18} className="sub-card__bell" />
+                    {s.name}
+                  </span>
                   {!s.enabled && <span className="badge">выключена</span>}
                 </div>
                 <SubDetails sub={s} meta={meta} />
@@ -115,6 +121,7 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
                     </>
                   ) : (
                     <button type="button" className="btn btn--sm btn--ghost-danger" onClick={() => setConfirmId(s.id)}>
+                      <Icon name="trash" size={16} />
                       Удалить
                     </button>
                   )}
@@ -144,12 +151,13 @@ function SubDetails({ sub, meta }: { sub: Subscription; meta: Meta | null }) {
     const c = meta?.categories.find((x) => x.id === id);
     tags.push(
       <span key={`c${id}`} className="tag">
-        {c ? `${c.emoji} ${c.label}` : id}
+        <Icon name={categoryIcon(id)} size={14} />
+        {c ? c.label : id}
       </span>,
     );
   }
   if (!sub.categories.length) tags.push(<span key="all" className="tag">Все категории</span>);
-  if (sub.pay_min != null) tags.push(<span key="pay" className="tag">от {rub(sub.pay_min)}/ч</span>);
+  if (sub.pay_min != null) tags.push(<span key="pay" className="tag"><Icon name="ruble" size={14} />от {rub(sub.pay_min)}/ч</span>);
   for (const id of sub.metro_ids) {
     const m = meta?.metro.find((x) => x.id === id);
     tags.push(
@@ -158,7 +166,7 @@ function SubDetails({ sub, meta }: { sub: Subscription; meta: Meta | null }) {
       </span>,
     );
   }
-  if (sub.radius_km != null && sub.lat != null) tags.push(<span key="r" className="tag">📍 до {sub.radius_km} км</span>);
-  if (sub.today_only) tags.push(<span key="t" className="tag">только сегодня</span>);
+  if (sub.radius_km != null && sub.lat != null) tags.push(<span key="r" className="tag"><Icon name="locate" size={14} />до {sub.radius_km} км от вас</span>);
+  if (sub.today_only) tags.push(<span key="t" className="tag"><Icon name="calendar" size={14} />только сегодня</span>);
   return <div className="tags">{tags}</div>;
 }

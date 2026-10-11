@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, ApiError, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
+import { Icon } from '../components/Icon';
 import { Avatar, Stars } from '../components/ui';
 import { formatDate, formatRating, plural } from '../format';
 import { backButtonSupported } from '../telegram';
@@ -41,8 +42,9 @@ export function UserProfile({ userId, isMe, onBack }: { userId: number; isMe: bo
     <div className="screen screen--detail">
       {!backButtonSupported && (
         <div className="topbar">
-          <button type="button" className="link-btn topbar__back" onClick={onBack}>
-            ‹ Назад
+          <button type="button" className="topbar__back" onClick={onBack}>
+            <Icon name="chevron-left" size={22} />
+            Назад
           </button>
         </div>
       )}
@@ -51,7 +53,7 @@ export function UserProfile({ userId, isMe, onBack }: { userId: number; isMe: bo
           <Spinner />
         </div>
       )}
-      {status === 'notfound' && <EmptyState icon="👤" title="Профиль не найден" />}
+      {status === 'notfound' && <EmptyState icon="user" title="Профиль не найден" />}
       {status === 'error' && <ErrorState text={error} onRetry={() => setAttempt((a) => a + 1)} />}
       {status === 'ready' && user && (
         <>
@@ -61,7 +63,8 @@ export function UserProfile({ userId, isMe, onBack }: { userId: number; isMe: bo
               {user.first_name}
               {isMe && <span className="hint"> · это вы</span>}
             </h1>
-            <div className="hint">
+            <div className="hint profile-card__role">
+              <Icon name={user.role === 'employer' ? 'users' : 'briefcase'} size={16} />
               {user.role === 'employer' ? 'Заказчик' : user.role === 'worker' ? 'Исполнитель' : 'Новичок'}
               {' · '}
               {user.role === 'employer'
@@ -82,6 +85,9 @@ export function UserProfile({ userId, isMe, onBack }: { userId: number; isMe: bo
             {user.about && <p className="detail__desc profile-card__about">{user.about}</p>}
           </div>
 
+          {user.reviews.length === 0 && user.rating == null && (
+            <p className="hint small center pad">Отзывы появятся после первой работы через Gigo.</p>
+          )}
           {user.reviews.length > 0 && (
             <section>
               <h2 className="list-title">Отзывы</h2>

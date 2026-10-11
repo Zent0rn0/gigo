@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import type { MetroStation } from '../types';
 import { Sheet } from './Sheet';
 import { MetroDot } from './MetroDot';
+import { Icon } from './Icon';
 
 interface Props {
   stations: MetroStation[];
@@ -54,14 +55,18 @@ export function MetroPicker({ stations, selected, onApply, onClose, single }: Pr
         )
       }
     >
-      <input
-        className="input input--search"
-        type="search"
-        placeholder="Найти станцию или линию"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        autoFocus={false}
-      />
+      <label className="search-box">
+        <Icon name="search" size={18} />
+        <input
+          className="input input--search"
+          type="search"
+          placeholder="Найти станцию или линию"
+          aria-label="Найти станцию или линию"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          autoFocus={false}
+        />
+      </label>
       <ul className="metro-list">
         {list.map((s) => {
           const on = picked.includes(s.id);

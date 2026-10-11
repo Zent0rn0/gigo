@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { loadYmaps } from '../ymaps';
+import { Icon } from './Icon';
 import { Sheet } from './Sheet';
 
 export interface Point {
@@ -71,7 +72,9 @@ export function PointPicker({ center, zoom, onClose, onApply }: Props) {
       ) : (
         <div className="point-map">
           <div className="point-map__map" ref={box} />
-          <div className="point-map__pin" aria-hidden>📍</div>
+          <div className="point-map__pin" aria-hidden="true">
+            <Icon name="pin" size={40} strokeWidth={2.2} />
+          </div>
         </div>
       )}
       <div className="hint small center">Передвиньте карту так, чтобы булавка стояла на месте работы.</div>
