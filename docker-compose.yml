@@ -1,0 +1,36 @@
+services:
+  db:
+    image: postgis/postgis:16-3.4
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gigo}
+      POSTGRES_USER: ${POSTGRES_USER:-gigo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-gigo}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  collector:
+    build: ./backend
+    restart: unless-stopped
+    command: python -m gigo.collector run
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-gigo}:${POSTGRES_PASSWORD:-gigo}@db:5432/${POSTGRES_DB:-gigo}
+    volumes:
+      - ./data:/app/data
+      - ./sources.txt:/app/sources.txt:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles: ["collector"]
+
+volumes:
+  pgdata:
