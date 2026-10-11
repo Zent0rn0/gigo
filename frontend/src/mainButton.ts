@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { mainButtonSupported, tg } from './telegram';
+import { BRAND_COLOR, mainButtonSupported, tg } from './telegram';
 
 export interface MainButtonConfig {
   text: string;
@@ -23,6 +23,11 @@ export function useMainButton(cfg: MainButtonConfig | null): void {
     if (!visible || !mb) return;
     const h = () => click.current?.();
     mb.onClick(h);
+    try {
+      mb.setParams?.({ color: BRAND_COLOR, text_color: '#FFFFFF' });
+    } catch {
+      /* старый клиент */
+    }
     mb.show();
     return () => {
       mb.offClick(h);

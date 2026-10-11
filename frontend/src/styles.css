@@ -1,6 +1,7 @@
 /*
  * Фон и текст — из темы Telegram (--tg-theme-*), чтобы приложение выглядело родным в светлой и тёмной теме.
- * Запасные значения — для обычного браузера. Фирменный оранжевый (--brand) — только для акцентов.
+ * Запасные значения — для обычного браузера. Акцентный цвет (кнопки, ссылки, выбор) — фирменный фиолетовый --brand,
+ * а не кнопка из темы Telegram: приложение должно выглядеть как Gigo в любом клиенте.
  * Тёмная тема: data-theme="dark" ставит telegram.ts по Telegram.WebApp.colorScheme; вне Telegram — prefers-color-scheme.
  */
 :root {
@@ -8,9 +9,9 @@
   --bg: var(--tg-theme-bg-color, #ffffff);
   --text: var(--tg-theme-text-color, #111418);
   --hint: var(--tg-theme-hint-color, #6b7280);
-  --link: var(--tg-theme-link-color, #2481cc);
-  --button: var(--tg-theme-button-color, #2481cc);
-  --button-text: var(--tg-theme-button-text-color, #ffffff);
+  --link: var(--brand-ink);
+  --button: var(--brand);
+  --button-text: #ffffff;
   --bg2: var(--tg-theme-secondary-bg-color, #f1f2f5);
   --danger: var(--tg-theme-destructive-text-color, #d92d20);
   --card: var(--tg-theme-section-bg-color, var(--bg));
@@ -19,16 +20,19 @@
   --shadow: 0 1px 2px rgba(16, 24, 40, 0.05), 0 2px 10px rgba(16, 24, 40, 0.05);
   --shadow-lg: 0 6px 24px rgba(16, 24, 40, 0.14);
 
-  /* бренд Gigo */
-  --brand: #ff6b2c;
-  --brand-ink: #c2410c; /* оранжевый текст на светлом фоне, контраст ≥ 4.5 */
-  --brand-soft: color-mix(in srgb, var(--brand) 13%, transparent);
+  /* бренд Gigo: фиолетовый */
+  --brand: #8a2bf7; /* белый текст на нём — контраст 5.6 */
+  --brand-deep: #4b0f8c;
+  --brand-lilac: #d49cf5;
+  --brand-ink: #6e1ad6; /* фиолетовый текст на светлом фоне, контраст 7.5 */
+  --brand-soft: color-mix(in srgb, var(--brand) 12%, transparent);
+  --brand-gradient: linear-gradient(135deg, #9b45ff 0%, #8a2bf7 45%, #6a17d4 100%);
 
   --pay: #15803d;
   --ok: #15803d;
   --wait: #b45309;
   --star: #f5a300;
-  --focus: var(--link);
+  --focus: var(--brand);
 
   --radius: 16px;
   --radius-sm: 12px;
@@ -44,7 +48,7 @@
   --c-promo: #db2777;
   --c-kitchen: #dc2626;
   --c-driver: #0369a1;
-  --c-event: #9333ea;
+  --c-event: #c026d3;
   --c-other: #64748b;
 }
 
@@ -54,15 +58,12 @@
     --bg: var(--tg-theme-bg-color, #17212b);
     --text: var(--tg-theme-text-color, #f5f7fa);
     --hint: var(--tg-theme-hint-color, #8b9bb0);
-    --link: var(--tg-theme-link-color, #6ab3f3);
-    --button: var(--tg-theme-button-color, #5288c1);
-    --button-text: var(--tg-theme-button-text-color, #ffffff);
     --bg2: var(--tg-theme-secondary-bg-color, #0e1621);
     --danger: var(--tg-theme-destructive-text-color, #f87171);
     --shadow: none;
     --shadow-lg: 0 6px 24px rgba(0, 0, 0, 0.5);
-    --brand-ink: #ff9a66;
-    --brand-soft: color-mix(in srgb, var(--brand) 20%, transparent);
+    --brand-ink: #b784ff;
+    --brand-soft: color-mix(in srgb, var(--brand) 24%, transparent);
     --pay: #4ade80;
     --ok: #4ade80;
     --wait: #fbbf24;
@@ -74,7 +75,7 @@
     --c-promo: #f472b6;
     --c-kitchen: #f87171;
     --c-driver: #38bdf8;
-    --c-event: #c084fc;
+    --c-event: #e879f9;
     --c-other: #94a3b8;
   }
 }
@@ -84,15 +85,12 @@
   --bg: var(--tg-theme-bg-color, #17212b);
   --text: var(--tg-theme-text-color, #f5f7fa);
   --hint: var(--tg-theme-hint-color, #8b9bb0);
-  --link: var(--tg-theme-link-color, #6ab3f3);
-  --button: var(--tg-theme-button-color, #5288c1);
-  --button-text: var(--tg-theme-button-text-color, #ffffff);
   --bg2: var(--tg-theme-secondary-bg-color, #0e1621);
   --danger: var(--tg-theme-destructive-text-color, #f87171);
   --shadow: none;
   --shadow-lg: 0 6px 24px rgba(0, 0, 0, 0.5);
-  --brand-ink: #ff9a66;
-  --brand-soft: color-mix(in srgb, var(--brand) 20%, transparent);
+  --brand-ink: #b784ff;
+  --brand-soft: color-mix(in srgb, var(--brand) 24%, transparent);
   --pay: #4ade80;
   --ok: #4ade80;
   --wait: #fbbf24;
@@ -104,7 +102,7 @@
   --c-promo: #f472b6;
   --c-kitchen: #f87171;
   --c-driver: #38bdf8;
-  --c-event: #c084fc;
+  --c-event: #e879f9;
   --c-other: #94a3b8;
 }
 
