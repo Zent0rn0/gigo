@@ -50,6 +50,11 @@ export function MyJobs({ meta, active, version, onOpenJob, onCreate }: Props) {
     .map((x) => x.j);
   const past = items.filter((j) => jobState(j) !== 'open');
   const pending = items.reduce((n, j) => n + (j.pending_count ?? 0), 0);
+  const stats = [
+    { value: open.length, label: plural(open.length, ['открытая', 'открытые', 'открытых']) },
+    { value: items.reduce((n, j) => n + j.responses_count, 0), label: 'откликов всего' },
+    { value: items.reduce((n, j) => n + j.accepted_count, 0), label: 'выбрано людей' },
+  ];
 
   return (
     <div className="screen">
@@ -74,6 +79,17 @@ export function MyJobs({ meta, active, version, onOpenJob, onCreate }: Props) {
           </button>
         )}
       </header>
+
+      {status === 'ready' && items.length > 0 && (
+        <div className="stats" aria-label="Статистика">
+          {stats.map((s) => (
+            <div key={s.label} className="stats__item">
+              <span className="stats__value">{s.value}</span>
+              <span className="stats__label">{s.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
 
       {status === 'loading' && (
         <div className="list">

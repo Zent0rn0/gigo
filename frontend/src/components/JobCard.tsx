@@ -70,6 +70,10 @@ export function JobCard({ job, category, onOpen, owner, footer, preview }: Props
           <StatusChip tone={job.my_response!.status === 'accepted' ? 'ok' : 'wait'} icon="check">
             {job.my_response!.status === 'accepted' ? 'Вас выбрали' : 'Вы откликнулись'}
           </StatusChip>
+        ) : job.is_invited ? (
+          <StatusChip tone="ok" icon="send">
+            Вас пригласили
+          </StatusChip>
         ) : (
           <span className="job-card__age">{preview ? 'только что' : formatAge(job.created_at)}</span>
         )}

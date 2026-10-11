@@ -33,7 +33,8 @@ def job_columns(viewer: str) -> str:
     (SELECT count(*) FILTER (WHERE r.status = 'accepted') FROM responses r WHERE r.job_id = j.id) AS accepted_count,
     (SELECT count(*) FILTER (WHERE r.status = 'pending') FROM responses r WHERE r.job_id = j.id) AS pending_count,
     j.employer_id = {viewer} AS is_mine,
-    EXISTS (SELECT 1 FROM saved_jobs s WHERE s.job_id = j.id AND s.user_id = {viewer}) AS is_saved
+    EXISTS (SELECT 1 FROM saved_jobs s WHERE s.job_id = j.id AND s.user_id = {viewer}) AS is_saved,
+    EXISTS (SELECT 1 FROM invites i WHERE i.job_id = j.id AND i.worker_id = {viewer}) AS is_invited
     """
 
 
@@ -53,7 +54,7 @@ class JobFilter:
     q: str | None = None
 
 
-def _like(text: str) -> str:
+def like_pattern(text: str) -> str:
     """Шаблон ILIKE «содержит» с экранированными % и _."""
     return "%" + text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
 
@@ -63,7 +64,7 @@ def search_condition(q: str, p) -> str | None:
     parts = []
     for word in q.lower().split()[:5]:
         cats = [k for k, (label, _) in CATEGORIES.items() if word in label.lower()]
-        ph = p(_like(word))
+        ph = p(like_pattern(word))
         cond = f"(j.title ILIKE {ph} OR j.description ILIKE {ph} OR j.address ILIKE {ph} OR m.name ILIKE {ph}"
         if cats:
             cond += f" OR j.category = ANY({p(cats)}::text[])"

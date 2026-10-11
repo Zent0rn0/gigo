@@ -48,8 +48,9 @@ async def client(pool, monkeypatch):
     monkeypatch.setenv("BOT_TOKEN", BOT_TOKEN)
     monkeypatch.setenv("DEV_AUTH", "0")
     monkeypatch.delenv("YANDEX_GEOCODER_KEY", raising=False)
-    from gigo.api.app import app
+    from gigo.api.app import app, mutations
 
+    mutations.hits.clear()  # лимит в памяти процесса не должен переходить из теста в тест
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://test", headers=auth()) as c:

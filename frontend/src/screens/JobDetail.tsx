@@ -394,6 +394,12 @@ export function JobDetail({
         </dl>
 
         {/* ——— исполнитель ——— */}
+        {!isOwner && job.is_invited && canRespond && (
+          <div className="note note--accent invite-note">
+            <Icon name="send" size={18} />
+            {job.employer.first_name} приглашает вас на эту заявку. Откликнитесь, если подходит.
+          </div>
+        )}
         {!isOwner && my && my.status !== 'withdrawn' && (
           <section className="section my-response">
             <div className="my-response__head">

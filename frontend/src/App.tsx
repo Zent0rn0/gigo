@@ -15,6 +15,7 @@ import { Onboarding } from './screens/Onboarding';
 import { Profile } from './screens/Profile';
 import { Subscriptions } from './screens/Subscriptions';
 import { UserProfile } from './screens/UserProfile';
+import { Workers } from './screens/Workers';
 import { backButtonSupported, deepLinkJobId, deepLinkTab, haptic, tg } from './telegram';
 import type { GeoPoint, Job, Me, Meta, Role } from './types';
 
@@ -367,7 +368,18 @@ export function App() {
                 }}
               />
             )}
-            {o.kind === 'user' && <UserProfile userId={o.id} isMe={o.id === me.id} meta={meta} onBack={pop} />}
+            {o.kind === 'user' && <UserProfile
+                userId={o.id}
+                isMe={o.id === me.id}
+                meta={meta}
+                viewerRole={me.role}
+                onBack={pop}
+                onCreateJob={() => {
+                  pop();
+                  switchTab('create');
+                }}
+                toast={toast}
+              />}
             {o.kind === 'subs' && (
               <Subscriptions
                 meta={meta}
@@ -438,6 +450,11 @@ export function App() {
                 push({ kind: 'job', id: job.id, job }, 0);
               }}
             />
+          </div>
+        )}
+        {shown('workers') && (
+          <div className="pane" hidden={tab !== 'workers'}>
+            <Workers meta={meta} active={on('workers')} onOpenUser={openUser} />
           </div>
         )}
         {shown('profile') && (
