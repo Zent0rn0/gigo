@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from 'react';
+import { useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { api, errorText } from '../api';
 import { Icon, categoryIcon, type IconName } from '../components/Icon';
 import { JobCard } from '../components/JobCard';
@@ -7,7 +7,7 @@ import { MetroDot } from '../components/MetroDot';
 import { PointPicker, type Point } from '../components/PointPicker';
 import { estimatePerHour, mskDay, rub } from '../format';
 import { useMainButton } from '../mainButton';
-import { haptic, mainButtonSupported } from '../telegram';
+import { backButtonSupported, haptic, mainButtonSupported } from '../telegram';
 import type { Job, JobIn, Me, Meta, PayUnit } from '../types';
 import { YMAPS_KEY } from '../ymaps';
 
@@ -17,6 +17,13 @@ interface Props {
   active: boolean;
   onCreated(job: Job): void;
   toast(text: string): void;
+  /**
+   * edit: правка открытой заявки (форма поверх вкладок, сохраняет PUT).
+   * repeat: новая заявка по образцу старой.
+   */
+  source?: { mode: 'edit' | 'repeat'; job: Job } | null;
+  /** Закрыть форму (только для source). */
+  onBack?(): void;
 }
 
 type DateMode = 'today' | 'tomorrow' | 'pick';
@@ -85,6 +92,44 @@ function saveLast(f: Form): void {
 }
 
 const freshForm = (meta: Meta): Form => ({ ...EMPTY, ...loadLast(meta) });
+
+const hmFmt = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' });
+
+/** Форма из существующей заявки. При повторе дата — сегодня, а если время сегодня уже прошло, завтра. */
+function formFromJob(job: Job, mode: 'edit' | 'repeat', now = new Date()): Form {
+  const time = job.starts_at ? hmFmt.format(new Date(job.starts_at)) : '';
+  const today = mskDay(now);
+  const tomorrow = mskDay(new Date(now.getTime() + 864e5));
+  let dateMode: DateMode = 'today';
+  let date = '';
+  if (mode === 'edit' && job.starts_on) {
+    if (job.starts_on === tomorrow) dateMode = 'tomorrow';
+    else if (job.starts_on !== today) {
+      dateMode = 'pick';
+      date = job.starts_on;
+    }
+  } else if (mode === 'repeat' && time && time < hmFmt.format(now)) {
+    dateMode = 'tomorrow';
+  }
+  // точку берём, только если её ставили сами или она от адреса: иначе сервер заново возьмёт координаты метро
+  const point = job.lat != null && job.lng != null && (!job.metro || job.address) ? { lat: job.lat, lng: job.lng } : null;
+  return {
+    category: job.category,
+    title: job.title,
+    description: job.description ?? '',
+    workers: job.workers_needed ?? 1,
+    payAmount: job.pay_amount != null ? String(Math.round(job.pay_amount)) : '',
+    payUnit: job.pay_unit ?? 'hour',
+    payTiming: job.pay_timing ?? '',
+    dateMode,
+    date,
+    time,
+    duration: job.duration_hours != null ? String(job.duration_hours).replace('.', ',') : '',
+    metroId: job.metro?.id ?? null,
+    address: job.address ?? '',
+    point,
+  };
+}
 
 const TIMING_PRESETS = ['сразу', 'в конце дня', 'на следующий день'];
 const MAX_WORKERS = 50;
@@ -155,8 +200,10 @@ function Section({ icon, title, children }: { icon: IconName; title: string; chi
   );
 }
 
-export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
-  const [form, setForm] = useState<Form>(() => freshForm(meta));
+export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }: Props) {
+  const editing = source?.mode === 'edit' ? source.job : null;
+  const catLabelId = useId();
+  const [form, setForm] = useState<Form>(() => (source ? formFromJob(source.job, source.mode) : freshForm(meta)));
   const [tried, setTried] = useState(false);
   const [touched, setTouched] = useState<Set<keyof Errors>>(() => new Set());
   const touch = (k: keyof Errors) => setTouched((t) => (t.has(k) ? t : new Set(t).add(k)));
@@ -190,13 +237,22 @@ export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
     setBusy(true);
     setServerError('');
     try {
+      if (editing) {
+        const job = await api.updateJob(editing.id, toBody(form));
+        haptic('success');
+        toast(editing.responses_count ? 'Сохранено. Откликнувшимся пришлём сообщение об изменениях.' : 'Изменения сохранены');
+        onCreated(job);
+        return;
+      }
       const job = await api.createJob(toBody(form));
       haptic('success');
       toast('Заявка опубликована. Сообщим, когда кто-то откликнется.');
       saveLast(form);
-      setForm(freshForm(meta));
-      setTried(false);
-      setTouched(new Set());
+      if (!source) {
+        setForm(freshForm(meta));
+        setTried(false);
+        setTouched(new Set());
+      }
       onCreated(job);
     } catch (e) {
       haptic('error');
@@ -207,7 +263,8 @@ export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
     }
   };
 
-  useMainButton(active && !metroOpen && !pointOpen ? { text: 'Опубликовать заявку', onClick: submit, progress: busy } : null);
+  const submitText = editing ? 'Сохранить изменения' : 'Опубликовать заявку';
+  useMainButton(active && !metroOpen && !pointOpen ? { text: submitText, onClick: submit, progress: busy } : null);
 
   const cls = (k: keyof Errors) => `field${shown[k] ? ' field--error' : ''}`;
   const err = (k: keyof Errors) =>
@@ -258,10 +315,27 @@ export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
   const timingCustom = TIMING_PRESETS.includes(form.payTiming) ? '' : form.payTiming;
 
   return (
-    <div className="screen">
+    <div className={`screen${source ? ' screen--detail' : ''}`}>
+      {source && !backButtonSupported && onBack && (
+        <div className="topbar">
+          <button type="button" className="topbar__back" onClick={onBack}>
+            <Icon name="chevron-left" size={22} />
+            Назад
+          </button>
+          <span />
+        </div>
+      )}
       <header className="feed-head">
-        <h1 className="app-title">Новая заявка</h1>
-        <p className="hint lead">Исполнители увидят её в ленте и на карте. Обычно первые отклики приходят за минуты.</p>
+        <h1 className="app-title">{editing ? 'Изменить заявку' : source ? 'Повторить заявку' : 'Новая заявка'}</h1>
+        <p className="hint lead">
+          {editing
+            ? editing.responses_count
+              ? 'Тем, кто уже откликнулся, бот пришлёт сообщение об изменениях.'
+              : 'Заявка останется в ленте с новыми условиями.'
+            : source
+              ? 'Всё заполнено как в прошлый раз. Проверьте дату и время и опубликуйте.'
+              : 'Исполнители увидят её в ленте и на карте. Обычно первые отклики приходят за минуты.'}
+        </p>
       </header>
 
       <form
@@ -274,10 +348,10 @@ export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
       >
         <Section icon="briefcase" title="Что за работа">
           <div className={cls('category')}>
-            <div className="field__label" id="cat-label">
+            <div className="field__label" id={catLabelId}>
               Категория
             </div>
-            <div className="chips chips--wrap" role="radiogroup" aria-labelledby="cat-label">
+            <div className="chips chips--wrap" role="radiogroup" aria-labelledby={catLabelId}>
               {meta.categories.map((c) => (
                 <button
                   key={c.id}
@@ -539,8 +613,8 @@ export function CreateJob({ meta, me, active, onCreated, toast }: Props) {
 
         {!mainButtonSupported && (
           <button type="submit" className="btn btn--primary btn--wide btn--lg" disabled={busy}>
-            <Icon name="send" size={20} />
-            {busy ? 'Публикуем…' : 'Опубликовать заявку'}
+            <Icon name={editing ? 'check' : 'send'} size={20} />
+            {busy ? (editing ? 'Сохраняем…' : 'Публикуем…') : submitText}
           </button>
         )}
         <div className="hint small center form-foot">

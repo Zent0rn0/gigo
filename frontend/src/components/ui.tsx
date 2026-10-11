@@ -1,8 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { formatRating, initial, type Tone } from '../format';
-import { Icon, type IconName } from './Icon';
+import { Icon, categoryIcon, type IconName } from './Icon';
 import { openContact } from '../telegram';
-import type { Contact, UserStub } from '../types';
+import type { Contact, Meta, UserStub } from '../types';
 
 const TONE_ICON: Record<Tone, IconName | null> = { ok: 'check', wait: 'clock', bad: 'x', muted: null };
 
@@ -172,6 +172,20 @@ export function ConfirmButton({
           Да
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Навыки исполнителя: категории, которые он отметил в профиле. highlight — категория заявки, совпадение выделено. */
+export function SkillChips({ ids, meta, highlight }: { ids: string[]; meta: Meta; highlight?: string }) {
+  return (
+    <div className="skill-chips" aria-label="Умеет">
+      {ids.map((id) => (
+        <span key={id} className={`skill-chip${id === highlight ? ' skill-chip--match' : ''}`}>
+          <Icon name={categoryIcon(id)} size={13} strokeWidth={2.1} />
+          {meta.categories.find((c) => c.id === id)?.label ?? id}
+        </span>
+      ))}
     </div>
   );
 }

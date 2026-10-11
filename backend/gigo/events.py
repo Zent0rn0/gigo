@@ -102,3 +102,9 @@ async def ask_review(conn, user_id: int, job, other_name: str | None) -> None:
                f"Как прошла работа «{esc(job['title'])}»? Оцените {esc(other_name or 'вторую сторону')}: "
                "отзывы помогают другим выбирать.",
                [job_button(job["id"], "★ Оставить отзыв")])
+
+
+async def job_edited(conn, job, worker_id: int) -> None:
+    await push(conn, worker_id,
+               f"✏️ Заказчик изменил заявку «{esc(job['title'])}». Проверьте время, место и оплату.",
+               [job_button(job["id"])])

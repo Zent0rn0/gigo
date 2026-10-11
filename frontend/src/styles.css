@@ -2665,3 +2665,106 @@ button.job-card:active {
     animation: none;
   }
 }
+
+/* ——— поиск, избранное, навыки (только токены темы) ——— */
+.feed-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 10px 16px 0;
+}
+
+.feed-search > .icon {
+  position: absolute;
+  left: 28px;
+  color: var(--hint);
+  pointer-events: none;
+}
+
+.feed-search .input {
+  height: 40px;
+  padding-right: 38px;
+}
+
+.feed-search input[type='search']::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+}
+
+.feed-search__clear {
+  position: absolute;
+  right: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--fill);
+  color: var(--hint);
+}
+
+.skills-hint {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 16px 6px;
+  min-width: 0;
+}
+
+.skills-hint .hint {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.skill-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 2px;
+}
+
+.skill-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 12px;
+  background: var(--fill);
+  color: var(--hint);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.skill-chip--match {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+
+.topbar__actions {
+  display: inline-flex;
+  gap: 8px;
+}
+
+.icon-btn--on {
+  background: var(--brand-soft);
+  color: var(--brand-ink);
+}
+
+.segmented--tabs {
+  margin-top: 12px;
+}
+
+.segmented__count {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 10px;
+  background: var(--fill);
+  font-size: 12px;
+  line-height: 20px;
+  font-weight: 600;
+}

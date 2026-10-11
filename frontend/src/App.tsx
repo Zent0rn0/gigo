@@ -19,7 +19,11 @@ import { backButtonSupported, deepLinkJobId, deepLinkTab, haptic, tg } from './t
 import type { GeoPoint, Job, Me, Meta, Role } from './types';
 
 /** Экраны поверх вкладок: карточка заявки, профиль человека, подписки. */
-type OverlayInit = { kind: 'job'; id: number; job: Job | null } | { kind: 'user'; id: number } | { kind: 'subs' };
+type OverlayInit =
+  | { kind: 'job'; id: number; job: Job | null }
+  | { kind: 'user'; id: number }
+  | { kind: 'subs' }
+  | { kind: 'form'; mode: 'edit' | 'repeat'; job: Job };
 type Overlay = OverlayInit & { key: number; pushed: boolean };
 
 function initialTab(role: Role): Tab {
@@ -237,6 +241,12 @@ export function App() {
   const openJob = useCallback((job: Job) => push({ kind: 'job', id: job.id, job }), [push]);
   const openUser = useCallback((id: number) => push({ kind: 'user', id }), [push]);
   const openSubs = useCallback(() => push({ kind: 'subs' }), [push]);
+  const openForm = useCallback((mode: 'edit' | 'repeat', job: Job) => push({ kind: 'form', mode, job }), [push]);
+  /** Опубликовали повтор: форма сверху заменяется карточкой новой заявки (та же запись в истории). */
+  const replaceTop = useCallback((o: OverlayInit) => {
+    setStack((s) => (s.length ? [...s.slice(0, -1), { ...o, key: keySeq.current++, pushed: s[s.length - 1].pushed }] : s));
+    window.scrollTo(0, 0);
+  }, []);
   const onJobUpdated = useCallback((job: Job) => setPatches((p) => (p[job.id] === job ? p : { ...p, [job.id]: job })), []);
 
   const switchRole = useCallback(
@@ -330,15 +340,34 @@ export function App() {
                 meta={meta}
                 me={me}
                 active={top}
+                version={version}
                 onBack={pop}
                 onOpenUser={openUser}
                 onSwitchRole={switchRole}
                 onChanged={bump}
                 onJobUpdated={onJobUpdated}
+                onEdit={(job) => openForm('edit', job)}
+                onRepeat={(job) => openForm('repeat', job)}
                 toast={toast}
               />
             )}
-            {o.kind === 'user' && <UserProfile userId={o.id} isMe={o.id === me.id} onBack={pop} />}
+            {o.kind === 'form' && (
+              <CreateJob
+                meta={meta}
+                me={me}
+                active={top}
+                source={{ mode: o.mode, job: o.job }}
+                onBack={pop}
+                toast={toast}
+                onCreated={(job) => {
+                  bump();
+                  onJobUpdated(job);
+                  if (o.mode === 'edit') pop();
+                  else replaceTop({ kind: 'job', id: job.id, job });
+                }}
+              />
+            )}
+            {o.kind === 'user' && <UserProfile userId={o.id} isMe={o.id === me.id} meta={meta} onBack={pop} />}
             {o.kind === 'subs' && (
               <Subscriptions
                 meta={meta}
@@ -368,6 +397,7 @@ export function App() {
               onToggleNear={toggleNear}
               onOpenJob={openJob}
               toast={toast}
+              skills={me.skills ?? []}
             />
           </div>
         )}
@@ -412,7 +442,7 @@ export function App() {
         )}
         {shown('profile') && (
           <div className="pane" hidden={tab !== 'profile'}>
-            <Profile me={me} onMeChange={setMe} onSwitchRole={switchRole} onOpenUser={openUser} onOpenSubs={openSubs} toast={toast} />
+            <Profile me={me} meta={meta} onMeChange={setMe} onSwitchRole={switchRole} onOpenUser={openUser} onOpenSubs={openSubs} toast={toast} />
           </div>
         )}
         <TabBar tabs={tabs} tab={tab} onChange={switchTab} />

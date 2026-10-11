@@ -2,12 +2,12 @@ import { useEffect, useState } from 'react';
 import { api, ApiError, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { Icon } from '../components/Icon';
-import { Avatar, Stars } from '../components/ui';
+import { Avatar, SkillChips, Stars } from '../components/ui';
 import { formatDate, formatRating, plural } from '../format';
 import { backButtonSupported } from '../telegram';
-import type { UserProfile as Profile } from '../types';
+import type { Meta, UserProfile as Profile } from '../types';
 
-export function UserProfile({ userId, isMe, onBack }: { userId: number; isMe: boolean; onBack(): void }) {
+export function UserProfile({ userId, isMe, meta, onBack }: { userId: number; isMe: boolean; meta: Meta; onBack(): void }) {
   const [user, setUser] = useState<Profile | null>(null);
   const [status, setStatus] = useState<'loading' | 'ready' | 'notfound' | 'error'>('loading');
   const [error, setError] = useState('');
@@ -82,6 +82,7 @@ export function UserProfile({ userId, isMe, onBack }: { userId: number; isMe: bo
                 <span className="hint">Отзывов пока нет</span>
               )}
             </div>
+            {user.role === 'worker' && !!user.skills?.length && <SkillChips ids={user.skills} meta={meta} />}
             {user.about && <p className="detail__desc profile-card__about">{user.about}</p>}
           </div>
 

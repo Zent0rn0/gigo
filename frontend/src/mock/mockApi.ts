@@ -44,6 +44,7 @@ const BLOCKED = 'Аккаунт заблокирован модератором 
 const reports: { job_id: number; reason: ReportReason; text: string | null }[] = [];
 
 const world = buildWorld();
+const saved: number[] = []; // id заявок в избранном, недавние в начале
 let subs: Subscription[] = initialSubscriptions.map((s) => ({ ...s }));
 let seq = 1000;
 const now = () => Date.now();
@@ -61,7 +62,7 @@ function ratingOf(id: number): { rating: number | null; reviews_count: number } 
 
 function stub(id: number, withAbout = false): UserStub {
   const u = user(id);
-  return { id: u.id, first_name: u.first_name, ...(withAbout ? { about: u.about } : {}), ...ratingOf(id) };
+  return { id: u.id, first_name: u.first_name, ...(withAbout ? { about: u.about, skills: u.skills ?? [] } : {}), ...ratingOf(id) };
 }
 
 function contactOf(id: number): Contact {
@@ -101,6 +102,7 @@ function serializeJob(j: JobRec, here: { lat: number; lng: number } | null = nul
     responses_count: rs.filter((r) => r.status !== 'withdrawn').length,
     accepted_count: rs.filter((r) => r.status === 'accepted').length,
     is_mine: isMine,
+    is_saved: saved.includes(j.id),
     my_response: mineResp ? serializeResponse(mineResp) : null,
   };
   if (isMine && full) job.responses = rs.sort((a, b) => b.created_at.localeCompare(a.created_at)).map(serializeResponse);
@@ -109,7 +111,7 @@ function serializeJob(j: JobRec, here: { lat: number; lng: number } | null = nul
 
 function meOut(): Me {
   const u = me();
-  return { id: u.id, username: u.username, first_name: u.first_name, role: u.role, about: u.about, ...ratingOf(u.id) };
+  return { id: u.id, username: u.username, first_name: u.first_name, role: u.role, about: u.about, skills: u.skills ?? [], ...ratingOf(u.id) };
 }
 
 function needRole(role: 'worker' | 'employer'): Promise<never> | null {
@@ -141,6 +143,56 @@ function perHour(amount: number, unit: JobIn['pay_unit'], hours: number | null):
   return { v: null, est: false };
 }
 
+/** Как на сервере: каждое слово есть в названии, описании, адресе, метро или названии категории. */
+function matches(j: JobRec, q: string | undefined): boolean {
+  const words = (q ?? '').toLowerCase().split(/\s+/).filter(Boolean);
+  const cat = meta.categories.find((c) => c.id === j.category)?.label ?? '';
+  const hay = [j.title, j.description, j.address, j.metro?.name, cat].filter(Boolean).join(' ').toLowerCase();
+  return words.every((w) => hay.includes(w));
+}
+
+function validateJob(b: JobIn): Promise<never> | null {
+  if (!b.category || !b.title?.trim() || !(b.pay_amount > 0) || !b.pay_unit) return fail(422, 'Заполните категорию, название и оплату');
+  if (!b.metro_id && !b.address && (b.lat == null || b.lng == null)) return fail(422, 'Укажите метро или адрес');
+  if (FRAUD.test(`${b.title} ${b.description ?? ''}`))
+    return fail(422, 'Заявка похожа на мошенничество (закладки, оформление карт, предоплата). Такие мы не публикуем.');
+  return null;
+}
+
+/** Поля заявки из формы (общие для создания и правки). */
+function jobFields(b: JobIn, createdAt: number) {
+  const st = b.metro_id ? metro.find((x) => x.id === b.metro_id) : undefined;
+  const startsAt = b.starts_on && b.start_time ? new Date(`${b.starts_on}T${b.start_time}:00+03:00`) : null;
+  const expires = startsAt
+    ? new Date(startsAt.getTime() + 3600e3)
+    : b.starts_on
+      ? new Date(`${b.starts_on}T23:59:59+03:00`)
+      : new Date(createdAt + 3 * 864e5);
+  const hours = b.duration_hours ?? null;
+  const ph = perHour(b.pay_amount, b.pay_unit, hours);
+  const jitter = () => (Math.random() - 0.5) * 0.01;
+  return {
+    category: b.category,
+    title: b.title.trim(),
+    description: b.description ?? null,
+    workers_needed: b.workers_needed ?? 1,
+    pay_amount: b.pay_amount,
+    pay_unit: b.pay_unit,
+    pay_per_hour: ph.v,
+    pay_estimated: ph.est,
+    pay_total: b.pay_unit === 'hour' ? (hours ? Math.round(b.pay_amount * hours) : null) : b.pay_amount,
+    pay_timing: b.pay_timing ?? null,
+    starts_on: b.starts_on ?? null,
+    starts_at: startsAt ? msk(startsAt) : null,
+    duration_hours: hours,
+    metro: st ? m(st.id) : null,
+    address: b.address ?? null,
+    lat: b.lat ?? (st ? st.lat + jitter() : meta.city.lat + jitter() * 5),
+    lng: b.lng ?? (st ? st.lng + jitter() : meta.city.lng + jitter() * 5),
+    expires_at: msk(expires),
+  };
+}
+
 export const mockApi = {
   meta(): Promise<Meta> {
     return delay(meta, 150);
@@ -155,6 +207,7 @@ export const mockApi = {
     const u = me();
     if (body.role) u.role = body.role;
     if (body.about != null) u.about = body.about.trim() || null;
+    if (body.skills) u.skills = meta.categories.map((c) => c.id).filter((id) => body.skills!.includes(id));
     return delay(meOut());
   },
 
@@ -168,6 +221,7 @@ export const mockApi = {
       .filter((j) => !q.metro?.length || (j.metro != null && q.metro.includes(j.metro.id)))
       .filter((j) => !q.today || j.starts_on === today)
       .filter((j) => !q.with_location || (j.lat != null && j.lng != null))
+      .filter((j) => matches(j, q.q))
       .map((j) => serializeJob(j, here))
       .filter((j) => q.radius_km == null || (j.distance_km != null && j.distance_km <= q.radius_km));
 
@@ -193,51 +247,47 @@ export const mockApi = {
   createJob(b: JobIn): Promise<Job> {
     const denied = needRole('employer');
     if (denied) return denied;
-    if (!b.category || !b.title?.trim() || !(b.pay_amount > 0) || !b.pay_unit) return fail(422, 'Заполните категорию, название и оплату');
-    if (!b.metro_id && !b.address && (b.lat == null || b.lng == null)) return fail(422, 'Укажите метро или адрес');
-    if (FRAUD.test(`${b.title} ${b.description ?? ''}`))
-      return fail(422, 'Заявка похожа на мошенничество (закладки, оформление карт, предоплата). Такие мы не публикуем.');
+    const invalid = validateJob(b);
+    if (invalid) return invalid;
     const openCount = world.jobs.filter((j) => j.employer_id === ME_ID && j.status === 'open' && !expired(j)).length;
     if (openCount >= 20) return fail(409, 'Не больше 20 открытых заявок. Закройте старые.');
 
-    const st = b.metro_id ? metro.find((x) => x.id === b.metro_id) : undefined;
-    const startsAt = b.starts_on && b.start_time ? new Date(`${b.starts_on}T${b.start_time}:00+03:00`) : null;
-    const expires = startsAt
-      ? new Date(startsAt.getTime() + 3600e3)
-      : b.starts_on
-        ? new Date(`${b.starts_on}T23:59:59+03:00`)
-        : new Date(now() + 3 * 864e5);
-    const hours = b.duration_hours ?? null;
-    const ph = perHour(b.pay_amount, b.pay_unit, hours);
-    const workers = b.workers_needed ?? 1;
-    const jitter = () => (Math.random() - 0.5) * 0.01;
     const rec: JobRec = {
       id: seq++,
       employer_id: ME_ID,
       status: 'open',
-      category: b.category,
-      title: b.title.trim(),
-      description: b.description ?? null,
-      workers_needed: workers,
-      pay_amount: b.pay_amount,
-      pay_unit: b.pay_unit,
-      pay_per_hour: ph.v,
-      pay_estimated: ph.est,
-      pay_total: b.pay_unit === 'hour' ? (hours ? Math.round(b.pay_amount * hours) : null) : b.pay_amount,
-      pay_timing: b.pay_timing ?? null,
-      starts_on: b.starts_on ?? null,
-      starts_at: startsAt ? msk(startsAt) : null,
-      duration_hours: hours,
-      metro: st ? m(st.id) : null,
-      address: b.address ?? null,
-      lat: b.lat ?? (st ? st.lat + jitter() : meta.city.lat + jitter() * 5),
-      lng: b.lng ?? (st ? st.lng + jitter() : meta.city.lng + jitter() * 5),
+      ...jobFields(b, now()),
       created_at: msk(new Date()),
-      expires_at: msk(expires),
     };
     world.jobs.unshift(rec);
     simulateResponses(rec.id);
     return delay(serializeJob(rec, null, true), 400);
+  },
+
+  updateJob(id: number, b: JobIn): Promise<Job> {
+    const j = jobRec(id);
+    if (!j || j.employer_id !== ME_ID) return fail(404, 'Заявка не найдена');
+    if (j.status !== 'open' || expired(j)) return fail(409, 'Изменить можно только открытую заявку. Для новой даты нажмите «Повторить».');
+    const invalid = validateJob(b);
+    if (invalid) return invalid;
+    const accepted = world.responses.filter((r) => r.job_id === id && r.status === 'accepted').length;
+    if ((b.workers_needed ?? 1) < accepted) return fail(422, `Вы уже выбрали ${accepted} исполнителей: меньше указать нельзя.`);
+    Object.assign(j, jobFields(b, new Date(j.created_at).getTime()));
+    return delay(serializeJob(j, null, true), 400);
+  },
+
+  setSaved(id: number, on: boolean): Promise<void> {
+    const i = saved.indexOf(id);
+    if (i >= 0) saved.splice(i, 1);
+    if (on) {
+      if (!jobRec(id)) return fail(404, 'Заявка не найдена');
+      saved.unshift(id);
+    }
+    return delay(undefined, 150);
+  },
+
+  savedJobs(): Promise<Job[]> {
+    return delay(saved.map(jobRec).filter((j): j is JobRec => !!j).map((j) => serializeJob(j)));
   },
 
   setJobStatus(id: number, status: JobStatus): Promise<Job> {
@@ -361,6 +411,7 @@ export const mockApi = {
       first_name: u.first_name,
       role: u.role,
       about: u.about,
+      skills: u.skills ?? [],
       ...ratingOf(id),
       jobs_count: jobsCount,
       reviews: world.reviews

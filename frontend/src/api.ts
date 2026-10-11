@@ -121,6 +121,7 @@ export function jobsSearchParams(q: JobsQuery): URLSearchParams {
   }
   if (q.sort && q.sort !== 'fresh') p.set('sort', q.sort);
   if (q.with_location) p.set('with_location', 'true');
+  if (q.q?.trim()) p.set('q', q.q.trim());
   if (q.limit != null) p.set('limit', String(q.limit));
   if (q.offset) p.set('offset', String(q.offset));
   return p;
@@ -158,6 +159,21 @@ export const api = {
   async createJob(body: JobIn): Promise<Job> {
     if (MOCK) return (await mock()).createJob(body);
     return request<Job>('/jobs', json('POST', body));
+  },
+
+  async updateJob(id: number, body: JobIn): Promise<Job> {
+    if (MOCK) return (await mock()).updateJob(id, body);
+    return request<Job>(`/jobs/${id}`, json('PUT', body));
+  },
+
+  async setSaved(id: number, saved: boolean): Promise<void> {
+    if (MOCK) return (await mock()).setSaved(id, saved);
+    await request<void>(`/jobs/${id}/save`, { method: saved ? 'PUT' : 'DELETE' });
+  },
+
+  async savedJobs(): Promise<Job[]> {
+    if (MOCK) return (await mock()).savedJobs();
+    return (await request<{ items: Job[] }>('/my/saved')).items;
   },
 
   async setJobStatus(id: number, status: JobStatus): Promise<Job> {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { api, ApiError, errorText } from '../api';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { HelpSheet, type HelpTopic } from '../components/HelpSheet';
@@ -8,7 +8,7 @@ import { MetroDot } from '../components/MetroDot';
 import { ReportSheet } from '../components/ReportSheet';
 import { ReviewSheet, type ReviewTarget } from '../components/ReviewSheet';
 import { Sheet } from '../components/Sheet';
-import { ConfirmButton, ContactButton, IconButton, StatusChip, UserRow } from '../components/ui';
+import { ConfirmButton, ContactButton, IconButton, SkillChips, StatusChip, UserRow } from '../components/ui';
 import {
   JOB_STATE_LABEL,
   JOB_STATE_TONE,
@@ -38,6 +38,8 @@ interface Props {
   me: Me;
   /** Экран сверху стека (видим): только тогда он управляет MainButton. */
   active: boolean;
+  /** Меняется после правки заявки: карточка тихо перезагружается. */
+  version: number;
   onBack(): void;
   onOpenUser(id: number): void;
   onSwitchRole(role: Role): void;
@@ -45,10 +47,29 @@ interface Props {
   onChanged(): void;
   /** Свежая версия заявки, чтобы лента показала «Вы откликнулись». */
   onJobUpdated(job: Job): void;
+  /** Автор: открыть форму правки. */
+  onEdit(job: Job): void;
+  /** Автор: новая заявка по образцу этой. */
+  onRepeat(job: Job): void;
   toast(text: string): void;
 }
 
-export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser, onSwitchRole, onChanged, onJobUpdated, toast }: Props) {
+export function JobDetail({
+  jobId,
+  initial,
+  meta,
+  me,
+  active,
+  version,
+  onBack,
+  onOpenUser,
+  onSwitchRole,
+  onChanged,
+  onJobUpdated,
+  onEdit,
+  onRepeat,
+  toast,
+}: Props) {
   const [job, setJob] = useState<Job | null>(initial);
   const [status, setStatus] = useState<'loading' | 'ready' | 'notfound' | 'error'>(initial ? 'ready' : 'loading');
   const [error, setError] = useState('');
@@ -62,15 +83,17 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
   const [reportOpen, setReportOpen] = useState(false);
   const [help, setHelp] = useState<HelpTopic | null>(null);
 
+  const loaded = useRef(!!initial);
   // Карточку из списка показываем сразу и тихо обновляем: у автора догрузятся отклики, у исполнителя — свежий my_response.
   useEffect(() => {
     let alive = true;
-    const soft = !!initial && attempt === 0;
+    const soft = loaded.current && attempt === 0;
     if (!soft) setStatus('loading');
     api
       .job(jobId)
       .then((j) => {
         if (!alive) return;
+        loaded.current = true;
         setJob(j);
         setStatus('ready');
       })
@@ -86,7 +109,7 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
     return () => {
       alive = false;
     };
-  }, [jobId, attempt]);
+  }, [jobId, attempt, version]);
 
   useEffect(() => {
     window.scrollTo(0, 0);
@@ -203,6 +226,25 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
     onChanged();
   };
 
+  const toggleSaved = async () => {
+    if (!job || busy) return;
+    const on = !job.is_saved;
+    setBusy('save');
+    setJob({ ...job, is_saved: on }); // сразу, без ожидания сервера
+    try {
+      await api.setSaved(job.id, on);
+      haptic(on ? 'success' : 'light');
+      toast(on ? 'Сохранено в избранное. Оно во вкладке «Отклики».' : 'Убрано из избранного');
+      onChanged();
+    } catch (e) {
+      haptic('error');
+      setJob((j) => (j ? { ...j, is_saved: !on } : j));
+      toast(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const share = async () => {
     if (!job) return;
     const parts = [formatPay(job), job.metro ? `м. ${job.metro.name}` : job.address, formatWhen(job)].filter(Boolean);
@@ -224,7 +266,23 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
         ) : (
           <span />
         )}
-        {withActions && <IconButton icon="share" label="Поделиться" onClick={share} />}
+        {withActions && (
+          <span className="topbar__actions">
+            {job && !job.is_mine && (
+              <button
+                type="button"
+                className={`icon-btn${job.is_saved ? ' icon-btn--on' : ''}`}
+                onClick={toggleSaved}
+                aria-pressed={!!job.is_saved}
+                aria-label={job.is_saved ? 'Убрать из избранного' : 'В избранное'}
+                title={job.is_saved ? 'Убрать из избранного' : 'В избранное'}
+              >
+                <Icon name="bookmark" size={20} filled={!!job.is_saved} />
+              </button>
+            )}
+            <IconButton icon="share" label="Поделиться" onClick={share} />
+          </span>
+        )}
       </div>
     );
 
@@ -423,6 +481,16 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
           <div className="actions">
             {state === 'open' && (
               <>
+                <div className="row-gap">
+                  <button type="button" className="btn btn--secondary btn--grow" disabled={!!busy} onClick={() => onEdit(job)}>
+                    <Icon name="edit" size={18} />
+                    Изменить
+                  </button>
+                  <button type="button" className="btn btn--secondary btn--grow" disabled={!!busy} onClick={() => onRepeat(job)}>
+                    <Icon name="copy" size={18} />
+                    Повторить
+                  </button>
+                </div>
                 <button type="button" className="btn btn--secondary btn--wide" disabled={!!busy} onClick={() => setJobStatus('closed')}>
                   <Icon name="check" size={18} />
                   {busy === 'job-closed' ? 'Закрываем…' : 'Закрыть набор'}
@@ -443,7 +511,13 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
                 {busy === 'job-open' ? 'Открываем…' : 'Открыть снова'}
               </button>
             )}
-            {state === 'expired' && <div className="hint small center">Срок заявки прошёл. Создайте новую, если люди ещё нужны.</div>}
+            {state !== 'open' && (
+              <button type="button" className="btn btn--primary btn--wide" onClick={() => onRepeat(job)}>
+                <Icon name="copy" size={18} />
+                Повторить заявку
+              </button>
+            )}
+            {state === 'expired' && <div className="hint small center">Срок заявки прошёл. Нажмите «Повторить», если люди ещё нужны.</div>}
           </div>
         )}
 
@@ -489,6 +563,7 @@ export function JobDetail({ jobId, initial, meta, me, active, onBack, onOpenUser
                     onOpen={onOpenUser}
                     right={<StatusChip tone={RESPONSE_TONE[r.status]}>{RESPONSE_LABEL_OWNER[r.status]}</StatusChip>}
                   />
+                  {!!r.worker.skills?.length && <SkillChips ids={r.worker.skills} meta={meta} highlight={job.category} />}
                   {r.worker.about && <div className="resp-card__about">{r.worker.about}</div>}
                   {r.message && <p className="quote">{r.message}</p>}
                   <div className="hint small">{formatAge(r.created_at)}</div>

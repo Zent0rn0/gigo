@@ -27,9 +27,11 @@ interface Props {
   onToggleNear(): void;
   onOpenJob(job: Job): void;
   toast(text: string): void;
+  /** Навыки исполнителя из профиля: быстрый фильтр «Мои навыки». */
+  skills: string[];
 }
 
-export function Feed({ meta, active, filters, location, locating, patches, onFiltersChange, onToggleNear, onOpenJob, toast }: Props) {
+export function Feed({ meta, active, filters, location, locating, patches, onFiltersChange, onToggleNear, onOpenJob, toast, skills }: Props) {
   const [items, setItems] = useState<Job[]>([]);
   const [total, setTotal] = useState(0);
   const [status, setStatus] = useState<'loading' | 'ready' | 'error'>('loading');
@@ -44,7 +46,19 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
   const filterKey = JSON.stringify(filters);
   const alreadySubscribed = subscribedKeys.has(filterKey);
 
-  const query = useMemo(() => filtersToQuery(filters, location), [filters, location]);
+  // поиск: в запрос уходит через паузу в наборе, чтобы не дёргать сервер на каждую букву
+  const [search, setSearch] = useState('');
+  const [q, setQ] = useState('');
+  useEffect(() => {
+    const t = window.setTimeout(() => setQ(search.trim()), 350);
+    return () => window.clearTimeout(t);
+  }, [search]);
+  const clearSearch = () => {
+    setSearch('');
+    setQ('');
+  };
+
+  const query = useMemo(() => ({ ...filtersToQuery(filters, location), ...(q ? { q } : {}) }), [filters, location, q]);
   const queryKey = JSON.stringify(query);
   const ctrl = useRef<AbortController | null>(null);
   // обновление без смены фильтра: список остаётся на экране, сверху — индикатор
@@ -139,6 +153,8 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
 
   const catById = useMemo(() => new Map(meta.categories.map((c) => [c.id, c])), [meta]);
   const waitingLocation = filters.nearMe && !location;
+  const showSkills = skills.length > 0 && !filters.categories.length;
+  const skillLabels = skills.map((id) => catById.get(id)?.label ?? id).join(', ');
   const showPull = pull > 0 || refreshing;
 
   return (
@@ -154,6 +170,30 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
       </header>
 
       <div className="feed-sticky">
+        <div className="feed-search">
+          <Icon name="search" size={18} />
+          <input
+            className="input input--search"
+            type="search"
+            enterKeyHint="search"
+            maxLength={100}
+            placeholder="Поиск: склад, курьер, Таганская…"
+            aria-label="Поиск заявок"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                setQ(search.trim());
+                (e.target as HTMLInputElement).blur();
+              }
+            }}
+          />
+          {search && (
+            <button type="button" className="feed-search__clear" onClick={clearSearch} aria-label="Очистить поиск" title="Очистить поиск">
+              <Icon name="x" size={16} />
+            </button>
+          )}
+        </div>
         <FilterBar meta={meta} filters={filters} locating={locating} onChange={onFiltersChange} onToggleNear={onToggleNear} />
       </div>
 
@@ -177,7 +217,7 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
               ? 'Ищем вас на карте…'
               : 'Загружаем…'}
         </span>
-        {alreadySubscribed ? (
+        {q ? null : alreadySubscribed ? (
           <span className="sub-done">
             <Icon name="bell-check" size={16} />
             Вы подписаны
@@ -190,6 +230,16 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
         )}
       </div>
 
+      {showSkills && (
+        <div className="skills-hint">
+          <button type="button" className="chip chip--ghost" onClick={() => onFiltersChange({ ...filters, categories: skills })}>
+            <Icon name="zap" size={16} />
+            Только мои навыки
+          </button>
+          <span className="hint small">{skillLabels}</span>
+        </div>
+      )}
+
       {status === 'loading' && (
         <div className="list">
           <JobCardSkeleton />
@@ -201,7 +251,21 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
 
       {status === 'error' && <ErrorState text={error} onRetry={() => setReloadKey((k) => k + 1)} />}
 
-      {status === 'ready' && items.length === 0 && (
+      {status === 'ready' && items.length === 0 && q && (
+        <EmptyState
+          icon="search"
+          title={`Ничего не нашли по «${q}»`}
+          text={isEmptyFilter(filters) ? 'Попробуйте другое слово: название работы, метро или район.' : 'Попробуйте другое слово или сбросьте фильтр.'}
+          action={
+            <button type="button" className="btn btn--secondary" onClick={clearSearch}>
+              <Icon name="x" size={18} />
+              Очистить поиск
+            </button>
+          }
+        />
+      )}
+
+      {status === 'ready' && items.length === 0 && !q && (
         <EmptyState
           icon="search"
           title={isEmptyFilter(filters) ? 'Пока заявок нет' : 'Под фильтр ничего нет'}
