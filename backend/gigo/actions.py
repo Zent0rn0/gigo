@@ -3,11 +3,15 @@
 Каждая функция работает в переданной транзакции и бросает ActionError с текстом для человека.
 """
 
-from datetime import datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta, timezone
 
-from gigo import events
+from gigo import events, rules
+from gigo.categories import CATEGORIES, PAY_UNITS, SCAM_FLAGS
 
 REPORTS_TO_HIDE = 3
+MAX_OPEN_JOBS = 20
+MAX_DAYS_AHEAD = 60
 
 
 class ActionError(Exception):
@@ -15,6 +19,12 @@ class ActionError(Exception):
         super().__init__(detail)
         self.status = status
         self.detail = detail
+
+
+async def check_recent(conn, sql: str, user_id: int, limit: int, message: str) -> None:
+    """Лимит по базе (переживает перезапуск): sql считает действия пользователя $1 за период."""
+    if await conn.fetchval(sql, user_id) >= limit:
+        raise ActionError(429, message)
 
 
 async def _users(conn, *ids: int) -> dict:
@@ -50,6 +60,177 @@ async def set_response_status(conn, response_id: int, actor_id: int, status: str
     else:
         raise ActionError(422, "Неизвестный статус")
     await conn.execute("UPDATE responses SET status = $2, updated_at = now() WHERE id = $1", response_id, status)
+
+
+# --- заявки и отклики: создание ---------------------------------------------------
+
+@dataclass
+class NewJob:
+    """Заявка от заказчика: из Mini App или из диалога с ботом. Тексты ещё не очищены."""
+    category: str
+    title: str
+    pay_amount: float
+    pay_unit: str
+    description: str | None = None
+    workers_needed: int = 1
+    pay_timing: str | None = None
+    starts_on: date | None = None
+    start_time: time | None = None
+    duration_hours: float | None = None
+    metro_id: str | None = None
+    address: str | None = None
+    lat: float | None = None
+    lng: float | None = None
+
+
+# Колонки заявки из job_fields; lat/lng собираются в location.
+JOB_COLUMNS = ("category", "title", "description", "workers_needed", "pay_amount", "pay_unit", "pay_per_hour",
+               "pay_estimated", "pay_total", "pay_timing", "starts_on", "starts_at", "duration_hours", "metro_id",
+               "address", "expires_at")
+LOCATION_SQL = ("CASE WHEN ${lat}::float8 IS NULL THEN NULL "
+                "ELSE ST_SetSRID(ST_MakePoint(${lng}, ${lat}), 4326)::geography END")
+
+
+async def job_fields(conn, geocoder, body: NewJob, created: datetime | None = None) -> dict:
+    """Проверенные поля заявки для INSERT/UPDATE. created: когда создана (для срока жизни при правке)."""
+    if body.category not in CATEGORIES:
+        raise ActionError(422, "Неизвестная категория")
+    if body.pay_unit not in PAY_UNITS:
+        raise ActionError(422, "Неизвестная единица оплаты")
+    title, description, address = rules.clean(body.title), rules.clean(body.description), rules.clean(body.address)
+    if not title:
+        raise ActionError(422, "Напишите, что нужно сделать")
+    if flags := rules.scam_flags(f"{title}\n{description or ''}"):
+        raise ActionError(422, f"Заявку нельзя опубликовать: {SCAM_FLAGS[flags[0]]}. "
+                               "Если это ошибка, переформулируйте текст.")
+    has_point = body.lat is not None and body.lng is not None
+    if not (body.metro_id or address or has_point):
+        raise ActionError(422, "Укажите метро или адрес")
+
+    now = datetime.now(rules.MSK)
+    day, at = body.starts_on, body.start_time
+    if at and not day:
+        day = now.date()
+    if day and not (now.date() <= day <= now.date() + timedelta(days=MAX_DAYS_AHEAD)):
+        raise ActionError(422, f"Дата должна быть от сегодня до {MAX_DAYS_AHEAD} дней вперёд")
+    start = rules.starts_at(day, at)
+    if start and start < now - timedelta(minutes=30):
+        raise ActionError(422, "Время начала уже прошло")
+
+    metro = None
+    if body.metro_id:
+        metro = await conn.fetchrow("SELECT ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng "
+                                    "FROM metro_stations WHERE id = $1", body.metro_id)
+        if not metro:
+            raise ActionError(422, "Неизвестная станция метро")
+    point = (body.lat, body.lng) if has_point else None
+    if not point and address and geocoder:
+        point = await geocoder.locate(address)
+    if not point and metro:
+        point = (metro["lat"], metro["lng"])
+
+    per_hour, estimated = rules.pay_per_hour(body.pay_amount, body.pay_unit, body.duration_hours)
+    return {
+        "category": body.category, "title": title, "description": description,
+        "workers_needed": body.workers_needed, "pay_amount": body.pay_amount, "pay_unit": body.pay_unit,
+        "pay_per_hour": per_hour, "pay_estimated": estimated,
+        "pay_total": rules.pay_total(body.pay_amount, body.pay_unit, body.duration_hours),
+        "pay_timing": rules.clean(body.pay_timing), "starts_on": day, "starts_at": start,
+        "duration_hours": body.duration_hours, "metro_id": body.metro_id, "address": address,
+        "lat": point[0] if point else None, "lng": point[1] if point else None,
+        "expires_at": rules.expires_at(created or now, day, start),
+    }
+
+
+async def create_job(conn, geocoder, employer_id: int, body: NewJob) -> int:
+    """Проверяет лимиты и поля и сохраняет заявку. Возвращает её id."""
+    if await conn.fetchval("SELECT count(*) FROM jobs WHERE employer_id = $1 AND status = 'open' "
+                           "AND expires_at > now()", employer_id) >= MAX_OPEN_JOBS:
+        raise ActionError(409, f"Открыто уже {MAX_OPEN_JOBS} заявок. Закройте ненужные, чтобы создать новую.")
+    await check_recent(conn, "SELECT count(*) FROM jobs WHERE employer_id = $1 "
+                             "AND created_at > now() - interval '1 hour'",
+                       employer_id, 5, "Не больше 5 заявок в час. Попробуйте позже.")
+    fields = await job_fields(conn, geocoder, body)
+    n = len(JOB_COLUMNS)
+    location = LOCATION_SQL.format(lat=n + 2, lng=n + 3)
+    return await conn.fetchval(
+        f"""INSERT INTO jobs (employer_id, {", ".join(JOB_COLUMNS)}, location)
+            VALUES ($1, {", ".join(f"${i}" for i in range(2, n + 2))}, {location}) RETURNING id""",
+        employer_id, *(fields[c] for c in JOB_COLUMNS), fields["lat"], fields["lng"],
+    )
+
+
+async def repeat_job(conn, job_id: int, employer_id: int, day: date) -> int:
+    """Новая заявка по образцу старой: те же условия, другой день."""
+    job = await conn.fetchrow("SELECT *, ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng "
+                              "FROM jobs WHERE id = $1", job_id)
+    if not job or job["employer_id"] != employer_id:
+        raise ActionError(404, "Заявка не найдена")
+    if job["hidden_at"]:
+        raise ActionError(409, "Заявку скрыл модератор, повторить её нельзя.")
+    at = job["starts_at"].astimezone(rules.MSK).time() if job["starts_at"] else None
+    return await create_job(conn, None, employer_id, NewJob(
+        category=job["category"], title=job["title"], description=job["description"],
+        workers_needed=job["workers_needed"], pay_amount=float(job["pay_amount"]), pay_unit=job["pay_unit"],
+        pay_timing=job["pay_timing"], starts_on=day, start_time=at,
+        duration_hours=float(job["duration_hours"]) if job["duration_hours"] else None,
+        metro_id=job["metro_id"], address=job["address"], lat=job["lat"], lng=job["lng"],
+    ))
+
+
+async def respond(conn, job_id: int, worker_id: int, message: str | None) -> int:
+    """Отклик исполнителя на заявку. Возвращает id отклика."""
+    message = rules.clean(message)
+    job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
+    if not job:
+        raise ActionError(404, "Заявка не найдена")
+    if job["employer_id"] == worker_id:
+        raise ActionError(409, "Это ваша заявка")
+    if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc) or job["hidden_at"]:
+        raise ActionError(409, "Набор на эту заявку закрыт")
+    await check_recent(conn, "SELECT count(*) FROM responses WHERE worker_id = $1 "
+                             "AND updated_at > now() - interval '1 hour'",
+                       worker_id, 30, "Слишком много откликов за час. Попробуйте позже.")
+    resp_id = await conn.fetchval(
+        """INSERT INTO responses (job_id, worker_id, message) VALUES ($1, $2, $3)
+           ON CONFLICT (job_id, worker_id) DO UPDATE
+               SET status = 'pending', message = EXCLUDED.message, updated_at = now()
+               WHERE responses.status = 'withdrawn'
+           RETURNING id""",
+        job_id, worker_id, message,
+    )
+    if not resp_id:
+        raise ActionError(409, "Вы уже откликнулись")
+    worker = await conn.fetchrow("SELECT tg_id, first_name, username FROM users WHERE tg_id = $1", worker_id)
+    await events.new_response(conn, job, worker, message, resp_id)
+    return resp_id
+
+
+async def save_review(conn, response_id: int, author_id: int, rating: int, text: str | None,
+                      keep_text: bool = False) -> str | None:
+    """Отзыв второй стороне по принятому отклику. Возвращает очищенный текст.
+
+    keep_text: оценка без текста не стирает уже написанный текст (бот сначала ставит звёзды, потом просит пару слов).
+    """
+    r = await conn.fetchrow(
+        "SELECT r.job_id, r.worker_id, r.status, j.employer_id FROM responses r JOIN jobs j ON j.id = r.job_id "
+        "WHERE r.id = $1", response_id)
+    if not r or author_id not in (r["worker_id"], r["employer_id"]):
+        raise ActionError(404, "Отклик не найден")
+    if r["status"] != "accepted":
+        raise ActionError(409, "Отзыв можно оставить только после того, как отклик принят")
+    if not 1 <= rating <= 5:
+        raise ActionError(422, "Оценка от 1 до 5")
+    target = r["worker_id"] if author_id == r["employer_id"] else r["employer_id"]
+    text = rules.clean(text)
+    await conn.execute(
+        """INSERT INTO reviews (job_id, author_id, target_id, rating, text) VALUES ($1, $2, $3, $4, $5)
+           ON CONFLICT (job_id, author_id, target_id) DO UPDATE
+               SET rating = EXCLUDED.rating, created_at = now(),
+                   text = CASE WHEN $6 THEN coalesce(EXCLUDED.text, reviews.text) ELSE EXCLUDED.text END""",
+        r["job_id"], author_id, target, rating, text, keep_text,
+    )
+    return text
 
 
 async def set_job_status(conn, job_id: int, actor_id: int, status: str) -> None:

@@ -1,138 +1,120 @@
-"""Команды и кнопки бота."""
+"""Бот: команды, меню и кнопки. Через бота можно и создать заявку, и откликнуться, без Mini App."""
 
 import logging
 import re
 
-from aiogram import Dispatcher, F
+from aiogram import Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, CallbackQuery, Message
 
 from gigo import actions, config
+from gigo.bot import browse, create, manage
+from gigo.bot.common import MENU, Kb, UserMiddleware, btn, note
 from gigo.bot.loops import app_button, keyboard
-from gigo.format import esc
 
 log = logging.getLogger("gigo.bot")
 
 COMMANDS = [
-    BotCommand(command="start", description="Открыть Gigo"),
+    BotCommand(command="start", description="Меню"),
+    BotCommand(command="jobs", description="Найти работу"),
     BotCommand(command="new", description="Создать заявку"),
     BotCommand(command="my", description="Мои заявки и отклики на них"),
     BotCommand(command="responses", description="Мои отклики"),
     BotCommand(command="subs", description="Подписки на новые заявки"),
     BotCommand(command="stop", description="Выключить рассылку новых заявок"),
+    BotCommand(command="cancel", description="Прервать текущее действие"),
     BotCommand(command="help", description="Как это работает"),
 ]
 
 HELP = (
     "<b>Gigo: подработка в Москве без посредников</b>\n\n"
-    "<b>Ищете людей?</b> Создайте заявку: что сделать, где, когда и сколько платите. Отклики придут сюда, "
-    "принять или отклонить можно прямо в чате. После принятия вы увидите контакт исполнителя.\n\n"
-    "<b>Ищете подработку?</b> Смотрите заявки в ленте и на карте, откликайтесь в один тап. "
-    "Подпишитесь на фильтр, и новые заявки будут приходить сюда.\n\n"
+    "<b>Ищете людей?</b> /new: заявка за минуту прямо здесь. Отклики придут сюда, "
+    "принять или отклонить можно в чате, после принятия вы увидите контакт исполнителя. "
+    "/my: ваши заявки, отклики, закрыть набор или повторить заявку на другой день.\n\n"
+    "<b>Ищете подработку?</b> /jobs: свежие заявки, откликайтесь в один тап. "
+    "Пришлите геопозицию, и я покажу работу рядом. /subs: подписки, новые заявки будут приходить сами.\n\n"
     "<b>Безопасность.</b> Не платите за «оформление», форму или обучение и не передавайте данные карт и коды из СМС. "
     "Подозрительную заявку отправьте модератору кнопкой «Пожаловаться» в приложении.\n\n"
-    "/new создать заявку · /my мои заявки · /responses мои отклики · /subs подписки"
+    "Всё то же самое есть в приложении: кнопка «Gigo» слева от поля ввода."
 )
 
-STATUS = {"pending": "⏳ ждёт ответа", "accepted": "✅ принят", "rejected": "✖️ отклонён", "withdrawn": "↩️ отозван"}
+WELCOME = (
+    "<b>Привет! Это Gigo: подработка в Москве без посредников.</b>\n\n"
+    "Заказчики публикуют заявки, исполнители откликаются, после принятия вы получаете контакты друг друга. "
+    "Всё можно делать прямо в этом чате, меню внизу.\n\nЧто вы ищете?"
+)
+
 _START_PAYLOAD = re.compile(r"^(job_\d+|tab_[a-z]+)$")
 
 
 def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage())
+    dp.message.outer_middleware(UserMiddleware(pool))
+    dp.callback_query.outer_middleware(UserMiddleware(pool))
     admins = set(settings.admin_ids)
-
-    async def remember(user) -> bool:
-        """Запоминает пользователя; False, если он заблокирован."""
-        row = await pool.fetchrow(
-            """INSERT INTO users (tg_id, username, first_name) VALUES ($1, $2, $3)
-               ON CONFLICT (tg_id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name,
-                   bot_blocked = FALSE, last_seen_at = now()
-               RETURNING banned_at""",
-            user.id, user.username, (user.first_name or "")[:64] or None,
-        )
-        return row["banned_at"] is None
+    kb = Kb(settings)
+    browse_router, send_card = browse.make_router(settings, pool)
+    main = Router(name="main")
+    dp.include_routers(main, create.make_router(settings, pool), browse_router, manage.make_router(settings, pool))
+    tail = Router(name="tail")  # то, что не подошло ни одному обработчику
+    dp.include_router(tail)
 
     def open_app(text: str, path: str = ""):
         return app_button(settings, text, path)
 
-    @dp.message(CommandStart())
-    async def start(message: Message, command: CommandObject) -> None:
-        if not await remember(message.from_user):
-            await message.answer("Аккаунт заблокирован за нарушение правил Gigo.")
-            return
+    @main.message(CommandStart())
+    async def start(message: Message, command: CommandObject, state: FSMContext, role: str | None = None) -> None:
+        await state.clear()
         payload = command.args or ""
         if _START_PAYLOAD.match(payload):
-            path = f"?job={payload[4:]}" if payload.startswith("job_") else f"?tab={payload[4:]}"
-            await message.answer("Открываю 👇", reply_markup=open_app("Открыть", path))
+            if payload.startswith("job_"):
+                await send_card(message, message.from_user.id, int(payload[4:]))
+            else:
+                await message.answer("Открываю 👇", reply_markup=open_app("Открыть", f"?tab={payload[4:]}"))
             return
-        await message.answer(HELP, reply_markup=open_app("Открыть Gigo"))
-
-    @dp.message(Command("help"))
-    async def help_(message: Message) -> None:
-        await message.answer(HELP, reply_markup=open_app("Открыть Gigo"))
-
-    @dp.message(Command("new"))
-    async def new(message: Message) -> None:
-        await message.answer("Заполните заявку в приложении: это займёт минуту.",
-                             reply_markup=open_app("Создать заявку", "?tab=create"))
-
-    @dp.message(Command("my"))
-    async def my(message: Message) -> None:
-        rows = await pool.fetch(
-            """SELECT j.id, j.title, j.status, j.expires_at > now() AS active,
-                      count(r.*) FILTER (WHERE r.status = 'pending') AS pending,
-                      count(r.*) FILTER (WHERE r.status = 'accepted') AS accepted
-               FROM jobs j LEFT JOIN responses r ON r.job_id = j.id
-               WHERE j.employer_id = $1 AND j.status = 'open' AND j.hidden_at IS NULL
-               GROUP BY j.id ORDER BY j.created_at DESC LIMIT 10""",
-            message.from_user.id,
-        )
-        if not rows:
-            await message.answer("Открытых заявок нет.", reply_markup=open_app("Создать заявку", "?tab=create"))
+        if role is None:
+            await message.answer("👋", reply_markup=MENU)
+            await message.answer(WELCOME, reply_markup=kb([btn("🔎 Ищу подработку", "role:worker")],
+                                                          [btn("👷 Ищу исполнителей", "role:employer")]))
             return
-        lines = ["<b>Ваши открытые заявки</b>"]
-        rows_kb = []
-        for r in rows:
-            state = f"новых откликов: {r['pending']}" if r["pending"] else "новых откликов нет"
-            if r["accepted"]:
-                state += f", принято: {r['accepted']}"
-            if not r["active"]:
-                state = "срок вышел"
-            lines.append(f"• {esc(r['title'])} — {state}")
-            rows_kb.append([{"text": r["title"][:40], "path": f"?job={r['id']}"}])
-        await message.answer("\n".join(lines), reply_markup=keyboard(settings, rows_kb))
+        await message.answer("Меню внизу 👇 Подробнее: /help", reply_markup=MENU)
 
-    @dp.message(Command("responses"))
-    async def responses(message: Message) -> None:
-        rows = await pool.fetch(
-            """SELECT r.status, j.id, j.title FROM responses r JOIN jobs j ON j.id = r.job_id
-               WHERE r.worker_id = $1 ORDER BY r.updated_at DESC LIMIT 10""",
-            message.from_user.id,
-        )
-        if not rows:
-            await message.answer("Откликов пока нет. Найдите заявку в ленте.",
-                                 reply_markup=open_app("Открыть ленту", "?tab=feed"))
-            return
-        lines = ["<b>Ваши отклики</b>"] + [f"• {esc(r['title'])} — {STATUS[r['status']]}" for r in rows]
-        await message.answer("\n".join(lines), reply_markup=open_app("Все отклики", "?tab=responses"))
-
-    @dp.message(Command("subs"))
-    async def subs(message: Message) -> None:
-        rows = await pool.fetch(
-            "SELECT name, enabled FROM subscriptions WHERE user_id = $1 ORDER BY id", message.from_user.id
-        )
-        if not rows:
-            text = "Подписок пока нет. Откройте ленту, настройте фильтр и нажмите «Подписаться»."
+    @main.callback_query(F.data.regexp(r"^role:(worker|employer)$"))
+    async def choose_role(call: CallbackQuery, state: FSMContext) -> None:
+        role = call.data[5:]
+        await pool.execute("UPDATE users SET role = $2 WHERE tg_id = $1", call.from_user.id, role)
+        await call.answer()
+        if role == "worker":
+            await note(call, "Ищу подработку", kb([btn("🔎 Смотреть заявки", "feed:*:0")],
+                                                  [btn("🔔 Подписаться на новые", "sub:new")]))
         else:
-            text = "Ваши подписки:\n" + "\n".join(f"{'🔔' if r['enabled'] else '🔕'} {esc(r['name'])}" for r in rows)
-        await message.answer(text, reply_markup=open_app("Управлять подписками", "?tab=profile"))
+            await note(call, "Ищу исполнителей", kb([btn("➕ Создать первую заявку", "nj:start")]))
 
-    @dp.message(Command("stop"))
-    async def stop(message: Message) -> None:
-        await pool.execute("UPDATE subscriptions SET enabled = FALSE WHERE user_id = $1", message.from_user.id)
-        await message.answer("Рассылка новых заявок выключена. События по вашим заявкам и откликам "
-                             "по-прежнему будут приходить. Подписки включаются в приложении.")
+    @main.message(Command("help"))
+    async def help_(message: Message) -> None:
+        await message.answer(HELP, reply_markup=MENU)
+
+    @main.message(Command("menu"))
+    async def menu(message: Message, state: FSMContext) -> None:
+        await state.clear()
+        await message.answer("Меню внизу 👇", reply_markup=MENU)
+
+    @main.message(Command("cancel"))
+    async def cancel_cmd(message: Message, state: FSMContext) -> None:
+        had = await state.get_state()
+        await state.clear()
+        await message.answer("Отменил." if had else "Нечего отменять.", reply_markup=MENU)
+
+    @main.callback_query(F.data == "cancel")
+    async def cancel_btn(call: CallbackQuery, state: FSMContext) -> None:
+        await state.clear()
+        try:
+            await call.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await call.answer("Готово")
 
     # --- кнопки под сообщениями -------------------------------------------------
 
@@ -146,17 +128,19 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
         await call.answer(note)
 
     def _app_rows(call: CallbackQuery) -> list[list[dict]]:
-        """Оставляет кнопки, открывающие приложение."""
+        """Оставляет кнопки, открывающие приложение или список откликов."""
         kb = call.message.reply_markup.inline_keyboard if call.message and call.message.reply_markup else []
         rows = []
         for row in kb:
             for b in row:
-                if b.web_app:
+                if b.callback_data and b.callback_data.startswith(("rl:", "mj:", "job:")):
+                    rows.append([{"text": b.text, "data": b.callback_data}])
+                elif b.web_app:
                     path = b.web_app.url.split("/", 3)[-1] if settings.webapp_url else ""
                     rows.append([{"text": b.text, "path": path if path.startswith("?") else ""}])
         return rows
 
-    @dp.callback_query(F.data.regexp(r"^(acc|rej):\d+$"))
+    @main.callback_query(F.data.regexp(r"^(acc|rej):\d+$"))
     async def decide(call: CallbackQuery) -> None:
         kind, rid = call.data.split(":")
         status = "accepted" if kind == "acc" else "rejected"
@@ -169,7 +153,7 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
         await finish(call, "✅ Принят. Контакт исполнителя пришёл отдельным сообщением." if status == "accepted"
                      else "✖️ Отклонён")
 
-    @dp.callback_query(F.data.regexp(r"^(hide|ok|ban):\d+$"))
+    @main.callback_query(F.data.regexp(r"^(hide|ok|ban):\d+$"))
     async def moderate(call: CallbackQuery) -> None:
         if call.from_user.id not in admins:
             await call.answer("Только для модераторов", show_alert=True)
@@ -193,7 +177,7 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
 
     # --- команды модератора ---------------------------------------------------------
 
-    @dp.message(Command("ban", "unban", "stats"), F.from_user.id.in_(admins))
+    @main.message(Command("ban", "unban", "stats"), F.from_user.id.in_(admins))
     async def admin(message: Message, command: CommandObject) -> None:
         if command.command == "stats":
             s = await pool.fetchrow(
@@ -226,9 +210,15 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
         except actions.ActionError as e:
             await message.answer(e.detail)
 
-    @dp.message()
-    async def other(message: Message) -> None:
-        await message.answer("Заявки и отклики в приложении 👇 Команды: /help",
-                             reply_markup=open_app("Открыть Gigo"))
+    @tail.message()
+    async def other(message: Message, state: FSMContext) -> None:
+        if await state.get_state():
+            await message.answer("Жду ответ на вопрос выше. Прервать: /cancel")
+            return
+        await message.answer("Не понял. Выберите действие в меню внизу или /help.", reply_markup=MENU)
+
+    @tail.callback_query()
+    async def stale(call: CallbackQuery) -> None:
+        await call.answer("Эта кнопка устарела. Начните заново из меню.", show_alert=True)
 
     return dp

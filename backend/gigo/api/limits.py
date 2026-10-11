@@ -3,8 +3,6 @@
 import time
 from collections import defaultdict, deque
 
-from fastapi import HTTPException
-
 
 class RateLimiter:
     """Скользящее окно в памяти процесса: не больше limit событий за window секунд на ключ."""
@@ -26,9 +24,3 @@ class RateLimiter:
             for k in [k for k, v in self.hits.items() if not v or v[-1] <= now - self.window]:
                 del self.hits[k]
         return True
-
-
-async def check_recent(conn, sql: str, user_id: int, limit: int, message: str) -> None:
-    """Лимит по базе (переживает перезапуск): sql считает действия пользователя $1 за период."""
-    if await conn.fetchval(sql, user_id) >= limit:
-        raise HTTPException(429, message)
