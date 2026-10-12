@@ -5,6 +5,7 @@
 
 import asyncio
 import logging
+import os
 from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
@@ -12,6 +13,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 
 from gigo import config, db
+from gigo.bot import look
 from gigo.bot.handlers import COMMANDS, make_dispatcher
 from gigo.bot.loops import notify_once, remind_once, send_outbox_once  # noqa: F401  (тесты импортируют отсюда)
 from gigo.migrate import migrate
@@ -41,6 +43,10 @@ async def run() -> None:
     await migrate(settings.database_url)
     pool = await db.connect(settings.database_url)
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
+    bot.session.middleware(look.PrettyMiddleware())
+    if sets := [s for s in os.getenv("CUSTOM_EMOJI_SETS", "").replace(" ", "").split(",") if s]:
+        n = await look.load_custom_emoji(bot, sets)
+        log.info("премиум-эмодзи: %d замен из наборов %s", n, ", ".join(sets))
     await bot.set_my_commands(COMMANDS)
     if settings.webapp_url:
         await bot.set_chat_menu_button(

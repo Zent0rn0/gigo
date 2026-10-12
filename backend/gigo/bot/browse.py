@@ -10,7 +10,8 @@ from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardM
 
 from gigo import actions, config, events
 from gigo.bot.common import (ANSWER, BTN_FIND, BTN_NEAR, BTN_RESPONSES, BTN_SUBS, MENU, STATUS, Kb, app, btn,
-                             category_rows, ensure_role, job_card, note, replace, short_line)
+                             category_rows, ensure_role, job_card, note, num, replace, short_line)
+from gigo.bot import look
 from gigo.categories import CATEGORIES
 from gigo.format import esc
 from gigo.jobs_query import JobFilter, build_feed, jobs_where
@@ -46,16 +47,16 @@ def make_router(settings: config.Settings, pool):
         rows = await pool.fetch(list_sql, *params)
         total = await pool.fetchval(count_sql, *params)
         if near:
-            title = f"<b>Работа в {NEAR_KM} км от вас</b>"
+            title = f"📍 <b>Работа в {NEAR_KM} км от вас</b>"
             base = f"near:{lat:.4f}:{lng:.4f}:"
         else:
-            title = "<b>Свежие заявки</b>" + (f" · {CATEGORIES[cat][0]}" if cat != "*" else "")
+            title = "🔎 <b>Свежие заявки</b>" + (f" · {CATEGORIES[cat][1]} {CATEGORIES[cat][0]}" if cat != "*" else "")
             base = f"feed:{cat}:"
         if not rows:
-            text = title + "\n\nПока ничего нет. Подпишитесь, и новые заявки будут приходить сюда сами."
+            text = title + "\n\n<i>Пока ничего нет.</i> Подпишитесь, и новые заявки будут приходить сюда сами."
             return text, kb([btn("🔔 Подписаться", "sub:new")],
                             [btn("🗂 Другая категория", "fcat")] if not near else None)
-        lines = [title + f" · {offset + 1}–{offset + len(rows)} из {total}"]
+        lines = [title + f"\n<i>{offset + 1}–{offset + len(rows)} из {total}</i>"]
         for i, job in enumerate(rows, start=1):
             lines.append(short_line(i, job, job["distance_km"]))
         numbers = [btn(str(i), f"job:{job['id']}") for i, job in enumerate(rows, start=1)]
@@ -66,7 +67,7 @@ def make_router(settings: config.Settings, pool):
             nav.append(btn("🗂 Категория", "fcat"))
         if offset + PAGE < total:
             nav.append(btn("▶️", f"{base}{offset + PAGE}"))
-        text = "\n\n".join(lines) + "\n\nНажмите номер, чтобы открыть заявку и откликнуться."
+        text = "\n\n".join(lines) + "\n\n👇 <i>Нажмите номер, чтобы открыть заявку и откликнуться.</i>"
         return text, kb(numbers, nav)
 
     @r.message(Command("jobs"))
@@ -74,7 +75,7 @@ def make_router(settings: config.Settings, pool):
     async def find(message: Message, state: FSMContext) -> None:
         await state.clear()
         text, markup = await feed_page(message.from_user.id, "*", 0)
-        await message.answer(text, reply_markup=markup)
+        await look.show(message, text, markup, banner="find")
 
     @r.callback_query(F.data.regexp(r"^feed:([a-z]+|\*):\d+$"))
     async def feed_more(call: CallbackQuery) -> None:
@@ -107,7 +108,7 @@ def make_router(settings: config.Settings, pool):
     async def near(message: Message) -> None:
         loc = message.location
         text, markup = await feed_page(message.from_user.id, "*", 0, loc.latitude, loc.longitude)
-        await message.answer(text, reply_markup=markup)
+        await look.show(message, text, markup, banner="near")
 
     @r.callback_query(F.data.regexp(r"^near:-?[\d.]+:-?[\d.]+:\d+$"))
     async def near_more(call: CallbackQuery) -> None:
@@ -139,7 +140,7 @@ def make_router(settings: config.Settings, pool):
             return kb([btn("↩️ Отозвать отклик", f"wd:{mine['id']}")], save, app_row)
         if job["status"] != "open":
             return kb(save, app_row)
-        return kb([btn("🙋 Откликнуться", f"ap:{job['id']}"), btn("✍️ С сообщением", f"apm:{job['id']}")],
+        return kb([btn("🙋 Откликнуться", f"ap:{job['id']}", "success"), btn("✍️ С сообщением", f"apm:{job['id']}")],
                   save, app_row)
 
     def card_text(job, mine) -> str:
@@ -227,7 +228,7 @@ def make_router(settings: config.Settings, pool):
         except actions.ActionError as e:
             await message.answer(e.detail)
             return
-        await message.answer("✅ Отклик с сообщением отправлен. Когда заказчик ответит, я напишу.",
+        await message.answer("✅ <b>Отклик отправлен</b>\nКогда заказчик ответит, я напишу.",
                              reply_markup=kb([btn("↩️ Отозвать отклик", f"wd:{rid}")]))
 
     @r.callback_query(F.data.regexp(r"^wd:\d+$"))
@@ -255,29 +256,30 @@ def make_router(settings: config.Settings, pool):
             message.from_user.id,
         )
         if not rows:
-            await message.answer("Откликов пока нет. Найдите заявку: /jobs",
-                                 reply_markup=kb([btn(BTN_FIND, "feed:*:0")]))
+            await look.show(message, "🙋 <b>Ваши отклики</b>\n\n<i>Откликов пока нет.</i> Найдите заявку по душе: /jobs",
+                       kb([btn(BTN_FIND, "feed:*:0", "primary")]), banner="responses")
             return
-        lines = ["<b>Ваши отклики</b>"]
+        lines = ["🙋 <b>Ваши отклики</b>"]
         buttons = []
         for i, row in enumerate(rows, start=1):
-            line = f"{i}. {esc(row['title'])} — {STATUS[row['status']]}"
+            line = f"{num(i)} <b>{esc(row['title'])}</b>\n{STATUS[row['status']]}"
             if row["status"] == "accepted":
-                line += f"\n    Заказчик: {events.contact_html(row['employer_id'], row['first_name'], row['username'])}"
+                line += f" · 👤 {events.contact_html(row['employer_id'], row['first_name'], row['username'])}"
             lines.append(line)
             buttons.append(btn(str(i), f"job:{row['job_id']}"))
-        await message.answer("\n".join(lines) + "\n\nНажмите номер, чтобы открыть заявку.",
-                             reply_markup=kb(buttons[:5], buttons[5:], [app("Все отклики", "?tab=responses")]))
+        await look.show(message, "\n\n".join(lines) + "\n\n👇 <i>Нажмите номер, чтобы открыть заявку.</i>",
+                   kb(buttons[:5], buttons[5:], [app("Все отклики", "?tab=responses")]), banner="responses")
 
     # --- подписки ---------------------------------------------------------------
 
     async def subs_view(user_id: int):
         rows = await pool.fetch("SELECT id, name, enabled FROM subscriptions WHERE user_id = $1 ORDER BY id", user_id)
         if rows:
-            text = ("<b>Подписки</b>\nНовые заявки по ним приходят сюда. Нажмите на подписку, "
-                    "чтобы выключить или включить её.")
+            text = ("🔔 <b>Подписки</b>\n\nНовые заявки по ним приходят сюда сразу после публикации.\n"
+                    "<i>Нажмите на подписку, чтобы выключить или включить её.</i>")
         else:
-            text = "<b>Подписок пока нет</b>\nПодпишитесь на категорию или на работу рядом, и новые заявки будут приходить сюда."
+            text = ("🔔 <b>Подписки</b>\n\n<i>Подписок пока нет.</i> Подпишитесь на категорию или на работу рядом, "
+                    "и новые заявки будут приходить сюда сами.")
         rows_kb = [[btn(f"{'🔔' if s['enabled'] else '🔕'} {s['name']}"[:60], f"sub:t:{s['id']}"),
                     btn("🗑", f"sub:d:{s['id']}")] for s in rows]
         rows_kb.append([btn("➕ По категории", "sub:new"), btn("📍 Рядом с местом", "sub:near")])
@@ -288,7 +290,7 @@ def make_router(settings: config.Settings, pool):
     async def subs(message: Message, state: FSMContext) -> None:
         await state.clear()
         text, markup = await subs_view(message.from_user.id)
-        await message.answer(text, reply_markup=markup)
+        await look.show(message, text, markup, banner="subs")
 
     @r.callback_query(F.data.regexp(r"^sub:[td]:\d+$"))
     async def sub_change(call: CallbackQuery) -> None:

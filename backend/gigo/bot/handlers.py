@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, CallbackQuery, Message
 
 from gigo import actions, config
-from gigo.bot import browse, create, manage
+from gigo.bot import browse, create, look, manage
 from gigo.bot.common import MENU, Kb, UserMiddleware, btn, note
 from gigo.bot.loops import app_button, keyboard
 
@@ -29,21 +29,31 @@ COMMANDS = [
 ]
 
 HELP = (
-    "<b>Gigo: подработка в Москве без посредников</b>\n\n"
-    "<b>Ищете людей?</b> /new: заявка за минуту прямо здесь. Отклики придут сюда, "
-    "принять или отклонить можно в чате, после принятия вы увидите контакт исполнителя. "
-    "/my: ваши заявки, отклики, закрыть набор или повторить заявку на другой день.\n\n"
-    "<b>Ищете подработку?</b> /jobs: свежие заявки, откликайтесь в один тап. "
-    "Пришлите геопозицию, и я покажу работу рядом. /subs: подписки, новые заявки будут приходить сами.\n\n"
-    "<b>Безопасность.</b> Не платите за «оформление», форму или обучение и не передавайте данные карт и коды из СМС. "
-    "Подозрительную заявку отправьте модератору кнопкой «Пожаловаться» в приложении.\n\n"
-    "Всё то же самое есть в приложении: кнопка «Gigo» слева от поля ввода."
+    "💜 <b>Gigo: подработка в Москве без посредников</b>\n\n"
+    "👷 <b>Ищете людей?</b>\n"
+    "<blockquote>/new · заявка за минуту прямо здесь\n"
+    "/my · ваши заявки: отклики, закрыть набор, повторить на другой день\n"
+    "Отклики приходят сюда, принять или отклонить можно в один тап, после этого вы получите контакт.</blockquote>\n\n"
+    "🔎 <b>Ищете подработку?</b>\n"
+    "<blockquote>/jobs · свежие заявки, отклик в один тап\n"
+    "📍 пришлите геопозицию, и я покажу работу рядом\n"
+    "/subs · подписки: новые заявки будут приходить сами\n"
+    "/responses · ваши отклики и контакты заказчиков</blockquote>\n\n"
+    "🛡 <b>Безопасность</b>\n"
+    "<blockquote>Не платите за «оформление», форму или обучение и не передавайте данные карт и коды из СМС. "
+    "Подозрительную заявку отправьте модератору кнопкой «Пожаловаться» в приложении.</blockquote>\n\n"
+    "<i>Всё то же самое есть в приложении: кнопка «Gigo» слева от поля ввода.</i>"
 )
 
 WELCOME = (
-    "<b>Привет! Это Gigo: подработка в Москве без посредников.</b>\n\n"
-    "Заказчики публикуют заявки, исполнители откликаются, после принятия вы получаете контакты друг друга. "
-    "Всё можно делать прямо в этом чате, меню внизу.\n\nЧто вы ищете?"
+    "💜 <b>Привет! Это Gigo</b>\n"
+    "<i>Подработка в Москве без посредников</i>\n\n"
+    "📝 Заказчики публикуют заявки\n"
+    "🙋 Исполнители откликаются в один тап\n"
+    "🤝 После выбора вы получаете контакты друг друга\n"
+    "⭐ После работы оставляете отзывы\n\n"
+    "Всё можно делать прямо в этом чате, меню внизу.\n\n"
+    "<b>Что вы ищете?</b>"
 )
 
 _START_PAYLOAD = re.compile(r"^(job_\d+|tab_[a-z]+)$")
@@ -76,10 +86,12 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
             return
         if role is None:
             await message.answer("👋", reply_markup=MENU)
-            await message.answer(WELCOME, reply_markup=kb([btn("🔎 Ищу подработку", "role:worker")],
-                                                          [btn("👷 Ищу исполнителей", "role:employer")]))
+            await look.show(message, WELCOME, kb([btn("🔎 Ищу подработку", "role:worker", "primary")],
+                                                 [btn("👷 Ищу исполнителей", "role:employer", "primary")]),
+                            banner="welcome")
             return
-        await message.answer("Меню внизу 👇 Подробнее: /help", reply_markup=MENU)
+        await look.show(message, "💜 <b>С возвращением в Gigo!</b>\n\nМеню внизу 👇 Подробнее: /help", MENU,
+                        banner="welcome")
 
     @main.callback_query(F.data.regexp(r"^role:(worker|employer)$"))
     async def choose_role(call: CallbackQuery, state: FSMContext) -> None:
@@ -94,7 +106,7 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
 
     @main.message(Command("help"))
     async def help_(message: Message) -> None:
-        await message.answer(HELP, reply_markup=MENU)
+        await look.show(message, HELP, MENU, banner="help")
 
     @main.message(Command("menu"))
     async def menu(message: Message, state: FSMContext) -> None:

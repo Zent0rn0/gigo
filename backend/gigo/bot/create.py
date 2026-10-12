@@ -10,6 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from gigo import actions, config, rules
+from gigo.bot import look
 from gigo.bot.common import ANSWER, BTN_NEW, MENU, Kb, app, btn, category_rows, ensure_role
 from gigo.categories import CATEGORIES, PAY_UNITS, SCAM_FLAGS
 from gigo.format import esc, job_message
@@ -88,7 +89,7 @@ def preview(d: dict) -> str:
         lines.append(f"🏠 {esc(d['address'])}")
     lines.append(f"👥 Нужно: {d['workers_needed']}")
     if d.get("description"):
-        lines.append(f"\n{esc(d['description'])}")
+        lines.append(f"\n<blockquote expandable>{esc(d['description'])}</blockquote>")
     return "\n".join(lines)
 
 
@@ -100,7 +101,7 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def chosen(call: CallbackQuery, text: str) -> None:
         """Убирает кнопки шага и оставляет в сообщении выбранное значение."""
         try:
-            await call.message.edit_text(f"{call.message.html_text}\n<b>→ {esc(text)}</b>", reply_markup=None)
+            await look.edit(call.message, f"{call.message.html_text}\n<b>→ {esc(text)}</b>", None)
         except Exception:
             pass
         try:
@@ -113,18 +114,19 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def ask_category(message: Message, state: FSMContext) -> None:
         await state.clear()
         await state.set_state(NewJobForm.category)
-        await message.answer("<b>Новая заявка</b> · шаг 1 из 7\nКакая работа?",
-                             reply_markup=kb(*category_rows("nj:cat:"), [CANCEL]))
+        await look.show(message, "➕ <b>Новая заявка</b>\n<i>7 коротких шагов, большинство кнопками.</i>\n\n"
+                                 "<b>Шаг 1 из 7</b> · Какая работа?",
+                        kb(*category_rows("nj:cat:"), [CANCEL]), banner="new")
 
     async def ask_title(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.title)
-        await message.answer("Шаг 2 из 7 · Что нужно сделать? Коротко, одной строкой.\n"
+        await message.answer("<b>Шаг 2 из 7</b> · Что нужно сделать? Коротко, одной строкой.\n"
                              "Например: <i>Разгрузить фуру с мебелью</i>", reply_markup=kb([CANCEL]))
 
     async def ask_unit(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.unit)
         units = [btn(label.capitalize(), f"nj:unit:{key}") for key, label in PAY_UNITS.items()]
-        await message.answer("Шаг 3 из 7 · Как платите?", reply_markup=kb(units[:2], units[2:], [CANCEL]))
+        await message.answer("<b>Шаг 3 из 7</b> · Как платите?", reply_markup=kb(units[:2], units[2:], [CANCEL]))
 
     async def ask_amount(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.amount)
@@ -134,7 +136,7 @@ def make_router(settings: config.Settings, pool) -> Router:
 
     async def ask_day(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.day)
-        await message.answer("Шаг 4 из 7 · Когда? Выберите день или напишите дату, например <i>15.10</i>.",
+        await message.answer("<b>Шаг 4 из 7</b> · Когда? Выберите день или напишите дату, например <i>15.10</i>.",
                              reply_markup=kb([btn("Сегодня", "nj:day:0"), btn("Завтра", "nj:day:1"),
                                               btn("Послезавтра", "nj:day:2")],
                                              [btn("Без даты, когда удобно", "nj:day:x")], [CANCEL]))
@@ -154,26 +156,26 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def ask_place(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.place)
         await state.update_data(metro_id=None, metro_name=None, address=None, lat=None, lng=None)
-        await message.answer("Шаг 5 из 7 · Где? Напишите станцию метро (<i>Таганская</i>), адрес "
+        await message.answer("<b>Шаг 5 из 7</b> · Где? Напишите станцию метро (<i>Таганская</i>), адрес "
                              "(<i>Тверская 7</i>) или оба через запятую (<i>Таганская, Марксистская 3</i>). "
                              "Можно отправить геопозицию: 📎 → Геопозиция.", reply_markup=kb([CANCEL]))
 
     async def ask_workers(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.workers)
-        await message.answer("Шаг 6 из 7 · Сколько человек нужно? Больше пяти — напишите число.",
+        await message.answer("<b>Шаг 6 из 7</b> · Сколько человек нужно? Больше пяти — напишите число.",
                              reply_markup=kb([btn(str(n), f"nj:n:{n}") for n in range(1, 6)], [CANCEL]))
 
     async def ask_description(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.description)
-        await message.answer("Шаг 7 из 7 · Детали: что взять с собой, как найти, когда оплата. "
+        await message.answer("<b>Шаг 7 из 7</b> · Детали: что взять с собой, как найти, когда оплата. "
                              "Напишите одним сообщением или пропустите.",
                              reply_markup=kb([btn("Пропустить", "nj:skip")], [CANCEL]))
 
     async def ask_confirm(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.confirm)
         d = await state.get_data()
-        await message.answer("<b>Проверьте заявку</b>\n\n" + preview(d),
-                             reply_markup=kb([btn("✅ Опубликовать", "nj:pub")],
+        await message.answer("👀 <b>Проверьте заявку</b>\n\n" + preview(d),
+                             reply_markup=kb([btn("✅ Опубликовать", "nj:pub", "success")],
                                              [btn("✏️ Заполнить заново", "nj:start"), CANCEL]))
 
     # --- обработчики ------------------------------------------------------------
@@ -409,10 +411,12 @@ def make_router(settings: config.Settings, pool) -> Router:
         await state.clear()
         await ensure_role(pool, call.from_user.id, "employer")
         await chosen(call, "опубликовано")
-        await call.message.answer(
-            "✅ Заявка опубликована. Исполнители с подходящей подпиской получат её сразу. "
-            "Отклики будут приходить сюда, принять или отклонить можно прямо в чате.",
-            reply_markup=kb([btn("⚙️ Управлять заявкой", f"mj:{job_id}")],
-                            [app("Открыть в приложении", f"?job={job_id}")]))
+        await look.show(
+            call.message,
+            "🚀 <b>Заявка опубликована!</b>\n\n"
+            "🔔 Исполнители с подходящей подпиской получат её прямо сейчас.\n"
+            "🙋 Отклики будут приходить сюда: принять или отклонить можно прямо в чате.",
+            kb([btn("⚙️ Управлять заявкой", f"mj:{job_id}", "primary")],
+               [app("Открыть в приложении", f"?job={job_id}")]), banner="published")
 
     return r

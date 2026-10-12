@@ -41,19 +41,20 @@ def job_message(job, metro_name: str | None, subscription: str | None = None) ->
     label, emoji = CATEGORIES.get(job["category"], CATEGORIES["other"])
     lines = []
     if subscription:
-        lines.append(f"🔔 По подписке «{esc(subscription)}»\n")
+        lines.append(f"🔔 <i>Новая заявка по подписке «{esc(subscription)}»</i>\n")
     lines.append(f"{emoji} <b>{esc(job['title'])}</b>")
+    lines.append(f"<i>{label}</i>\n")
     pay = pay_line(job["pay_per_hour"], job["pay_estimated"], job["pay_total"], job["pay_amount"],
                    job["pay_unit"], job["pay_timing"])
     if pay:
-        lines.append(f"💰 {esc(pay)}")
+        lines.append(f"💰 <b>{esc(pay)}</b>")
     where = f"м. {metro_name}" if metro_name else job["address"]
     if where:
         lines.append(f"📍 {esc(where)}")
     when = when_line(job["starts_on"], job["starts_at"], job["duration_hours"])
     if when:
-        lines.append(f"🕑 {when}")
-    return "\n".join(lines)
+        lines.append(f"🗓 {when}")
+    return "\n".join(lines).rstrip()
 
 
 def esc(text: str) -> str:

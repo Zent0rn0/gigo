@@ -10,6 +10,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from gigo import config, events
+from gigo.bot import look
 from gigo.format import job_message
 from gigo.rules import MSK
 
@@ -52,7 +53,7 @@ def keyboard(settings: config.Settings, rows: list[list[dict]] | None) -> Inline
         buttons = []
         for b in row:
             if "data" in b:
-                buttons.append(InlineKeyboardButton(text=b["text"], callback_data=b["data"]))
+                buttons.append(InlineKeyboardButton(text=b["text"], callback_data=b["data"], style=b.get("style")))
             elif url := app_url(settings, b.get("path", "")):
                 buttons.append(InlineKeyboardButton(text=b["text"], web_app=WebAppInfo(url=url)))
         if buttons:
@@ -64,10 +65,10 @@ def app_button(settings: config.Settings, text: str, path: str = "") -> InlineKe
     return keyboard(settings, [[{"text": text, "path": path}]])
 
 
-async def _send(bot: Bot, pool, user_id: int, text: str, markup) -> bool | None:
+async def _send(bot: Bot, pool, user_id: int, text: str, markup, banner: str | None = None) -> bool | None:
     """True: отправлено; False: не отправится никогда; None: повторить позже."""
     try:
-        await bot.send_message(user_id, text, reply_markup=markup, disable_web_page_preview=True)
+        await look.send(bot, user_id, text, markup, banner, disable_web_page_preview=True)
         return True
     except TelegramRetryAfter as e:
         await asyncio.sleep(e.retry_after)
@@ -106,7 +107,7 @@ async def notify_once(bot: Bot, pool, settings: config.Settings, since: datetime
 async def send_outbox_once(bot: Bot, pool, settings: config.Settings) -> int:
     """Отправляет накопившиеся события. Каждое уходит один раз."""
     rows = await pool.fetch(
-        "SELECT o.id, o.user_id, o.text, o.buttons FROM outbox o JOIN users u ON u.tg_id = o.user_id "
+        "SELECT o.id, o.user_id, o.text, o.buttons, o.banner FROM outbox o JOIN users u ON u.tg_id = o.user_id "
         "WHERE o.sent_at IS NULL AND o.attempts < $1 AND NOT u.bot_blocked ORDER BY o.id LIMIT 100",
         MAX_ATTEMPTS,
     )
@@ -120,7 +121,7 @@ async def send_outbox_once(bot: Bot, pool, settings: config.Settings) -> int:
             continue
         buttons = json.loads(r["buttons"]) if isinstance(r["buttons"], str) else r["buttons"]
         try:
-            ok = await _send(bot, pool, r["user_id"], r["text"], keyboard(settings, buttons))
+            ok = await _send(bot, pool, r["user_id"], r["text"], keyboard(settings, buttons), r["banner"])
         except Exception:
             ok = None
         if ok is None:

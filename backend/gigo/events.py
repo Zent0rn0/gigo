@@ -26,54 +26,68 @@ def job_button(job_id: int, text: str = "Открыть заявку") -> dict:
 FEED_BUTTONS = [{"text": "🔎 Найти работу", "data": "feed:*:0"}, {"text": "Лента в приложении", "path": "?tab=feed"}]
 
 
-async def push(conn, user_id: int, text: str, *rows: list[dict]) -> None:
+SAFETY = ("<blockquote>🛡 Не платите за «оформление», форму или обучение и не передавайте "
+          "данные карты и коды из СМС.</blockquote>")
+
+
+def title_html(job) -> str:
+    return f"«<b>{esc(job['title'])}</b>»"
+
+
+async def push(conn, user_id: int, text: str, *rows: list[dict], banner: str | None = None) -> None:
+    """banner: картинка над сообщением (gigo/bot/banners/<banner>.png); нет файла — уйдёт текстом."""
     await conn.execute(
-        "INSERT INTO outbox (user_id, text, buttons) VALUES ($1, $2, $3::jsonb)",
-        user_id, text, json.dumps([r for r in rows if r], ensure_ascii=False) if rows else None,
+        "INSERT INTO outbox (user_id, text, buttons, banner) VALUES ($1, $2, $3::jsonb, $4)",
+        user_id, text, json.dumps([r for r in rows if r], ensure_ascii=False) if rows else None, banner,
     )
 
 
 async def new_response(conn, job, worker, message: str | None, response_id: int) -> None:
-    text = f"🙋 Новый отклик на «{esc(job['title'])}»\n<b>{esc(worker['first_name'] or 'Исполнитель')}</b>"
+    text = (f"🙋 <b>Новый отклик</b> на {title_html(job)}\n\n"
+            f"👤 <b>{esc(worker['first_name'] or 'Исполнитель')}</b>")
     rating = await conn.fetchrow("SELECT round(avg(rating), 1) AS r, count(*) AS n FROM reviews WHERE target_id = $1",
                                  worker["tg_id"])
     text += f" · ★ {rating['r']} ({rating['n']})" if rating["n"] else " · пока без отзывов"
     if message:
-        text += f"\n«{esc(message)}»"
+        text += f"\n<blockquote>«{esc(message)}»</blockquote>"
     await push(conn, job["employer_id"], text,
-               [{"text": "✅ Принять", "data": f"acc:{response_id}"}, {"text": "✖️ Отклонить", "data": f"rej:{response_id}"}],
+               [{"text": "✅ Принять", "data": f"acc:{response_id}", "style": "success"},
+                {"text": "✖️ Отклонить", "data": f"rej:{response_id}", "style": "danger"}],
                [{"text": "👥 Все отклики", "data": f"rl:{job['id']}"}, job_button(job["id"], "В приложении")])
 
 
 async def accepted(conn, job, worker, employer) -> None:
     await push(
         conn, worker["tg_id"],
-        f"✅ Вас выбрали на «{esc(job['title'])}»\n"
-        f"Заказчик: {contact_html(employer['tg_id'], employer['first_name'], employer['username'])}. "
-        "Напишите ему, чтобы договориться о деталях.\n\n"
-        "Не платите заказчику за «оформление» или форму и не передавайте данные карты.",
-        [job_button(job["id"])],
+        f"🎉 <b>Вас выбрали!</b>\n{title_html(job)}\n\n"
+        f"👤 Заказчик: {contact_html(employer['tg_id'], employer['first_name'], employer['username'])}\n"
+        "Напишите ему, чтобы договориться о деталях.\n\n" + SAFETY,
+        [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")],
+        banner="accepted",
     )
     await push(
         conn, employer["tg_id"],
-        f"Вы приняли отклик на «{esc(job['title'])}»\n"
-        f"Исполнитель: {contact_html(worker['tg_id'], worker['first_name'], worker['username'])}",
-        [job_button(job["id"])],
+        f"🤝 <b>Исполнитель выбран</b>\n{title_html(job)}\n\n"
+        f"👤 {contact_html(worker['tg_id'], worker['first_name'], worker['username'])}\n"
+        "Напишите ему, чтобы договориться о деталях.",
+        [{"text": "⚙️ Управлять заявкой", "data": f"mj:{job['id']}"}, job_button(job["id"], "В приложении")],
     )
 
 
 async def rejected(conn, job, worker_id: int, reason: str = "Заказчик выбрал другого исполнителя") -> None:
-    await push(conn, worker_id, f"{reason} на «{esc(job['title'])}». Посмотрите другие заявки.", FEED_BUTTONS)
+    await push(conn, worker_id, f"😔 {reason} на {title_html(job)}.\nНе расстраивайтесь: посмотрите другие заявки.",
+               FEED_BUTTONS)
 
 
 async def withdrawn(conn, job, worker) -> None:
     await push(conn, job["employer_id"],
-               f"↩️ {esc(worker['first_name'] or 'Исполнитель')} отказался от «{esc(job['title'])}».",
-               [job_button(job["id"])])
+               f"↩️ <b>{esc(worker['first_name'] or 'Исполнитель')}</b> отказался от {title_html(job)}.\n"
+               "Откройте набор снова или выберите другого из откликов.",
+               [{"text": "⚙️ Управлять заявкой", "data": f"mj:{job['id']}"}, job_button(job["id"], "В приложении")])
 
 
 async def cancelled(conn, job, worker_id: int) -> None:
-    await push(conn, worker_id, f"❌ Заказчик отменил заявку «{esc(job['title'])}».", FEED_BUTTONS)
+    await push(conn, worker_id, f"❌ <b>Заявка отменена</b>\nЗаказчик отменил {title_html(job)}.", FEED_BUTTONS)
 
 
 async def job_hidden(conn, job) -> None:
@@ -95,26 +109,26 @@ async def report_to_admin(conn, admin_id: int, job, reason: str, text: str | Non
 
 
 async def reminder(conn, user_id: int, job, when: str) -> None:
-    await push(conn, user_id, f"⏰ Напоминание: «{esc(job['title'])}» {when}.",
+    await push(conn, user_id, f"⏰ <b>Скоро работа</b>\n{title_html(job)} {when}.\nНе опаздывайте 🙌",
                [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])
 
 
 async def ask_review(conn, user_id: int, job, other_name: str | None, response_id: int) -> None:
     await push(conn, user_id,
-               f"Как прошла работа «{esc(job['title'])}»? Оцените {esc(other_name or 'вторую сторону')}: "
-               "отзывы помогают другим выбирать.",
+               f"⭐ <b>Как всё прошло?</b>\n{title_html(job)}\n\n"
+               f"Оцените {esc(other_name or 'вторую сторону')}: отзывы помогают другим выбирать.",
                [{"text": f"{i}★", "data": f"rv:{response_id}:{i}"} for i in range(1, 6)],
-               [job_button(job["id"], "Отзыв в приложении")])
+               [job_button(job["id"], "Отзыв в приложении")], banner="review")
 
 
 async def job_edited(conn, job, worker_id: int) -> None:
     await push(conn, worker_id,
-               f"✏️ Заказчик изменил заявку «{esc(job['title'])}». Проверьте время, место и оплату.",
+               f"✏️ <b>Заявка изменилась</b>\n{title_html(job)}\nПроверьте время, место и оплату.",
                [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])
 
 
 async def invited(conn, job, employer_name: str | None, worker_id: int) -> None:
     await push(conn, worker_id,
-               f"📩 {esc(employer_name or 'Заказчик')} приглашает вас на «{esc(job['title'])}». "
+               f"📩 <b>Вас приглашают</b>\n{esc(employer_name or 'Заказчик')} зовёт вас на {title_html(job)}.\n"
                "Откройте заявку и откликнитесь, если подходит.",
                [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])
