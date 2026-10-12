@@ -64,6 +64,9 @@ class FakeBot:
     async def send_message(self, chat_id, text, reply_markup=None, **kw):
         self.sent.append((chat_id, text))
 
+    async def send_photo(self, chat_id, photo, caption=None, reply_markup=None, **kw):
+        self.sent.append((chat_id, caption))
+
 
 async def _metro(pool):
     await pool.execute(

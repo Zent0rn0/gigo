@@ -123,12 +123,12 @@ async def ask_review(conn, user_id: int, job, other_name: str | None, response_i
 
 async def job_edited(conn, job, worker_id: int) -> None:
     await push(conn, worker_id,
-               f"✏️ <b>Заявка изменилась</b>\n{title_html(job)}\nПроверьте время, место и оплату.",
+               f"✏️ <b>Заказчик изменил заявку «{esc(job['title'])}»</b>\nПроверьте время, место и оплату.",
                [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])
 
 
 async def invited(conn, job, employer_name: str | None, worker_id: int) -> None:
     await push(conn, worker_id,
-               f"📩 <b>Вас приглашают</b>\n{esc(employer_name or 'Заказчик')} зовёт вас на {title_html(job)}.\n"
+               f"📩 <b>{esc(employer_name or 'Заказчик')} приглашает вас</b> на {title_html(job)}.\n"
                "Откройте заявку и откликнитесь, если подходит.",
                [{"text": "📄 Открыть заявку", "data": f"job:{job['id']}"}, job_button(job["id"], "В приложении")])
