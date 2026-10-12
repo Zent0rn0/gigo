@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- Баннеры бота Gigo, 1280×640. Какой рисовать — по #ключу в адресе (см. BANNERS ниже).
+     Пересобрать PNG: node scripts/render_banners.mjs  →  backend/gigo/bot/banners/<ключ>.png -->
+<html lang="ru"><head><meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  [hidden] { display: none !important; }
+  .b { position: relative; width: 1280px; height: 640px; overflow: hidden; color: #fff;
+       font-family: Inter, 'Helvetica Neue', Arial, sans-serif;
+       background: linear-gradient(135deg, #9b45ff 0%, #8a2bf7 45%, #6a17d4 100%); }
+  .glow { position: absolute; left: -160px; top: -220px; width: 620px; height: 620px; border-radius: 50%;
+          background: radial-gradient(closest-side, rgba(255,255,255,.22), transparent); }
+  .pin-bg { position: absolute; right: -120px; bottom: -230px; width: 760px; opacity: .13; }
+  .logo { position: absolute; left: 72px; top: 60px; }
+  .tag { position: absolute; right: 64px; top: 58px; padding: 9px 26px; border: 3px solid rgba(212,156,245,.8);
+         border-radius: 999px; color: #f1dcfd; font-size: 28px; font-weight: 650; }
+  .text { position: absolute; left: 72px; top: 210px; width: 700px; }
+  h1 { white-space: nowrap; }
+  h1 { margin: 0; color: #ecc9fb; font-size: 92px; line-height: .98; font-weight: 850; text-transform: uppercase; letter-spacing: -1px; }
+  .pill { display: inline-block; margin-top: 34px; padding: 15px 32px; border-radius: 999px; background: #4b0f8c;
+          color: #d49cf5; font-size: 32px; font-weight: 750; }
+  .art { position: absolute; right: 120px; top: 170px; width: 330px; height: 330px; border-radius: 76px;
+         background: rgba(255,255,255,.14); box-shadow: inset 0 0 0 3px rgba(255,255,255,.18), 0 40px 80px -30px rgba(40,0,90,.6);
+         transform: rotate(-6deg); display: flex; align-items: center; justify-content: center; }
+  .art svg { width: 190px; height: 190px; }
+  .chip { position: absolute; display: flex; align-items: center; gap: 12px; padding: 14px 22px; border-radius: 24px;
+          background: #fff; color: #1b1f24; font-size: 27px; font-weight: 750; box-shadow: 0 20px 40px -18px rgba(40,0,90,.55); }
+  .chip i { width: 18px; height: 18px; border-radius: 50%; display: inline-block; }
+  .chip--a { right: 360px; top: 150px; transform: rotate(-4deg); }
+  .chip--b { right: 70px; top: 470px; transform: rotate(4deg); }
+  .chip .v { color: #6e1ad6; }
+</style></head>
+<body><div class="b" id="b">
+  <div class="glow"></div>
+  <svg class="pin-bg" viewBox="0 0 100 100"><path d="M29 60A27 27 0 1 1 71 60L54.2 82.5Q50 88 45.8 82.5Z" fill="none" stroke="#D49CF5" stroke-width="1.6"/></svg>
+  <svg class="logo" width="234" height="80" viewBox="0 0 292 100">
+    <defs><mask id="g" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><path d="M29 60A27 27 0 1 1 71 60L54.2 82.5Q50 88 45.8 82.5Z" fill="#fff"/><circle cx="50" cy="43" r="12" fill="#000"/><path d="M50 43L76 9H100V41H50Z" fill="#000"/><path d="M50 41H76.93A27 27 0 0 1 75.46 52H50Z" fill="#fff"/></mask></defs>
+    <rect width="100" height="100" rx="26" fill="#fff"/><rect width="100" height="100" fill="#8A2BF7" mask="url(#g)"/>
+    <g fill="none" stroke="#fff" stroke-width="12" stroke-linecap="round"><circle cx="140" cy="50" r="14"/><path d="M154 36V74A14 14 0 0 1 127.9 81"/><path d="M178 36V64"/><circle cx="216" cy="50" r="14"/><path d="M230 36V74A14 14 0 0 1 203.9 81"/><circle cx="270" cy="50" r="14"/></g><circle cx="178" cy="17" r="7" fill="#fff"/>
+  </svg>
+  <div class="tag" id="tag"></div>
+  <div class="text"><h1 id="h"></h1><div class="pill" id="p"></div></div>
+  <div class="art"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path id="icon"/></svg></div>
+  <div class="chip chip--a" id="ca" hidden></div>
+  <div class="chip chip--b" id="cb" hidden></div>
+</div>
+<script>
+const I = {
+  pin: 'M12 21s-6.5-5.8-6.5-11a6.5 6.5 0 0 1 13 0c0 5.2-6.5 11-6.5 11zM12 7.7a2.3 2.3 0 1 0 0 4.6 2.3 2.3 0 0 0 0-4.6z',
+  search: 'M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13zM20 20l-4.3-4.3',
+  users: 'M9 4.5a3.3 3.3 0 1 0 0 6.6 3.3 3.3 0 0 0 0-6.6zM2.8 19.5c.8-3.3 3.2-5 6.2-5s5.4 1.7 6.2 5M16 5a3 3 0 0 1 0 5.8M17.5 14.6c2 .5 3.3 2.1 3.8 4.9',
+  clipboard: 'M9 4.5H7a2 2 0 0 0-2 2V19a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V6.5a2 2 0 0 0-2-2h-2M9 3h6v3H9zM9 11h6M9 15h4',
+  inbox: 'M4 13.5V18a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4.5M4 13.5 6.3 5.6A2 2 0 0 1 8.2 4h7.6a2 2 0 0 1 1.9 1.6l2.3 7.9M4 13.5h4.5l1.2 2.5h4.6l1.2-2.5H20',
+  'bell-check': 'M6 16v-5a6 6 0 0 1 9-5.2M18 11v5l1.5 2h-15M10 20.5a2 2 0 0 0 4 0M15 7.5l2 2 4-4',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  map: 'M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6 9 4zM9 4v14M15 6v14',
+  send: 'M20.5 3.5 10 14M20.5 3.5 14 21l-4-7-6.5-3.5z',
+  star: 'M12 3.6l2.6 5.2 5.7.8-4.1 4 1 5.7L12 16.6l-5.2 2.7 1-5.7-4.1-4 5.7-.8z',
+  help: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9.6 9.3a2.5 2.5 0 0 1 4.8 1c0 1.7-2.4 2.2-2.4 3.7M12 17.2h.01',
+};
+const dot = (c) => `<i style="background:${c}"></i>`;
+// ключ: [плашка справа, заголовок, подзаголовок, иконка, чип A, чип B]
+const BANNERS = {
+  welcome:   ['Москва', 'Подработка<br>рядом', 'заявки на карте · отклик в один тап', 'pin', `${dot('#a0228d')}Таганская`, '<span class="v">1 200 ₽/ч</span>'],
+  find:      ['Исполнителям', 'Найди<br>подработку', 'оплата в час · рядом с метро', 'search', `${dot('#e42313')}Сокольники`, '<span class="v">500 ₽/ч</span>'],
+  near:      ['По геопозиции', 'Работа<br>рядом', 'ближайшие заявки к вам', 'map', `${dot('#4fb748')}800 м`, '<span class="v">450 ₽/ч</span>'],
+  new:       ['Заказчикам', 'Найди<br>людей', 'заявка за минуту прямо здесь', 'users', '✓ 3 отклика', '<span class="v">сегодня 18:00</span>'],
+  published: ['Заказчикам', 'Заявка<br>опубликована', 'отклики придут сюда', 'send', '✓ уже в ленте', ''],
+  my:        ['Заказчикам', 'Мои<br>заявки', 'отклики и выбранные люди', 'clipboard', '', ''],
+  responses: ['Исполнителям', 'Мои<br>отклики', 'статусы и контакты', 'inbox', '', ''],
+  subs:      ['Подписки', 'Новые<br>заявки', 'придут сами под ваш фильтр', 'bell-check', `${dot('#0078c9')}Арбатская`, '<span class="v">600 ₽/ч</span>'],
+  accepted:  ['Исполнителям', 'Вас<br>выбрали', 'контакт заказчика открыт', 'check', '✓ пишите в Telegram', ''],
+  review:    ['После работы', 'Оставьте<br>отзыв', 'рейтинг помогает всем', 'star', '★★★★★', ''],
+  help:      ['Бесплатно', 'Как это<br>работает', 'заявка · отклик · Telegram', 'help', '', ''],
+};
+const key = location.hash.slice(1) || 'welcome';
+const [tag, h, p, icon, a, b] = BANNERS[key];
+document.getElementById('tag').textContent = tag;
+document.getElementById('h').innerHTML = h;
+document.getElementById('p').textContent = p;
+document.getElementById('icon').setAttribute('d', I[icon]);
+for (const [id, v] of [['ca', a], ['cb', b]]) { const el = document.getElementById(id); if (v) { el.innerHTML = v; el.hidden = false; } }
+// длинный заголовок уменьшаем, чтобы не наезжал на картинку справа
+const h1 = document.getElementById('h');
+for (let size = 92; h1.scrollWidth > 700 && size > 56; size -= 2) h1.style.fontSize = size + 'px';
+window.BANNER_KEYS = Object.keys(BANNERS);
+</script></body></html>
