@@ -33,7 +33,8 @@ env_get() { grep -E "^$1=" .env | head -1 | cut -d= -f2- | tr -d '"'"'"' \r' || 
 API_PID=""; TUNNEL_PID=""""; BOT_PID=""; AWAKE_PID=""
 cleanup() {
   say "Останавливаю…"
-  for pid in $API_PID $TUNNEL_PID $BOT_PID $AWAKE_PID; do kill "$pid" 2>/dev/null || true; done
+  for pid in $API_PID $BOT_PID $AWAKE_PID; do kill "$pid" 2>/dev/null || true; done
+  declare -F stop_tunnel >/dev/null && stop_tunnel || true
   wait 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM
@@ -73,7 +74,10 @@ say "4/5 Туннель"
 # Выбрать вручную: TUNNEL=ngrok, TUNNEL=tailscale, TUNNEL=cloudflare или TUNNEL=ssh.
 NGROK_DOMAIN="${NGROK_DOMAIN:-$(env_get NGROK_DOMAIN)}"
 NGROK_DOMAIN="${NGROK_DOMAIN#https://}"; NGROK_DOMAIN="${NGROK_DOMAIN%/}"
-TS="$(command -v tailscale || echo /Applications/Tailscale.app/Contents/MacOS/Tailscale)"
+# Сам бинарник приложения: /usr/local/bin/tailscale на Mac лишь обёртка, после kill которой funnel продолжает жить.
+TS=/Applications/Tailscale.app/Contents/MacOS/Tailscale
+[ -x "$TS" ] || TS="$(command -v tailscale || true)"
+TUNNEL_KIND=""
 URL=""
 
 wait_url() {  # $1: шаблон адреса в логе
@@ -87,15 +91,21 @@ wait_url() {  # $1: шаблон адреса в логе
   return 1
 }
 
-reachable() {  # адрес отвечает снаружи
-  for _ in $(seq 1 20); do
+reachable() {  # адрес отвечает снаружи; $1: сколько раз проверить (по 2 с + таймаут)
+  for _ in $(seq 1 "${1:-20}"); do
     curl -fs --max-time 5 "$URL/api/health" >/dev/null 2>&1 && return 0
     sleep 2
   done
   return 1
 }
 
-stop_tunnel() { [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true; TUNNEL_PID=""; }
+stop_tunnel() {
+  [ -n "$TUNNEL_PID" ] && kill "$TUNNEL_PID" 2>/dev/null || true
+  TUNNEL_PID=""
+  # Funnel держит порт 443 в самом Tailscale, даже когда процесс CLI убит: снимаем его явно.
+  [ "$TUNNEL_KIND" = tailscale ] && "$TS" funnel reset >/dev/null 2>&1 || true
+  TUNNEL_KIND=""
+}
 
 try_cloudflare() {
   command -v cloudflared >/dev/null || { echo "cloudflared не установлен"; return 1; }
@@ -105,7 +115,7 @@ try_cloudflare() {
   TUNNEL_PID=$!
   wait_url 'https://[a-z0-9-]+\.trycloudflare\.com' && reachable && return 0
   echo "Cloudflare не отвечает (подробности в tunnel.log)"
-  stop_tunnel
+  declare -F stop_tunnel >/dev/null && stop_tunnel || true
   return 1
 }
 
@@ -115,7 +125,7 @@ try_ssh() {
   TUNNEL_PID=$!
   wait_url 'https://[a-z0-9-]+\.lhr\.life' && reachable && return 0
   echo "localhost.run не отвечает (подробности в tunnel.log)"
-  stop_tunnel
+  declare -F stop_tunnel >/dev/null && stop_tunnel || true
   return 1
 }
 
@@ -126,23 +136,27 @@ try_ngrok() {
   TUNNEL_PID=$!
   wait_url "https://${NGROK_DOMAIN//./\\.}" && reachable && return 0
   echo "ngrok не отвечает (подробности в tunnel.log; вход: ngrok config add-authtoken <токен>)"
-  stop_tunnel
+  declare -F stop_tunnel >/dev/null && stop_tunnel || true
   return 1
 }
 
 try_tailscale() {
   [ -x "$TS" ] || { echo "Tailscale не установлен"; return 1; }
   "$TS" status >/dev/null 2>&1 || { echo "Tailscale не запущен или не выполнен вход"; return 1; }
+  "$TS" funnel reset >/dev/null 2>&1 || true   # остатки прошлого запуска
+  TUNNEL_KIND=tailscale
   "$TS" funnel "$PORT" > "$LOGS/tunnel.log" 2>&1 < /dev/null &
   TUNNEL_PID=$!
-  wait_url 'https://[a-z0-9-]+\.[a-z0-9-]+\.ts\.net' && URL="${URL%/}" && reachable && return 0
+  # При первом включении Funnel выпускает сертификат и публикует DNS: это бывает до ~10 минут.
+  wait_url 'https://[a-z0-9-]+\.[a-z0-9-]+\.ts\.net' && URL="${URL%/}" && reachable "${FUNNEL_WAIT:-90}" && return 0
   if grep -q 'login.tailscale.com' "$LOGS/tunnel.log"; then
     echo "Funnel не включён. Включите по ссылке и запустите скрипт снова:"
     grep -Eo 'https://login\.tailscale\.com[^ ]+' "$LOGS/tunnel.log" | head -1
   else
-    echo "Tailscale Funnel не отвечает (подробности в tunnel.log)"
+    echo "Tailscale Funnel не отвечает (подробности в tunnel.log). Если он включён только что, DNS может"
+    echo "появиться через несколько минут: запустите скрипт ещё раз или TUNNEL=tailscale FUNNEL_WAIT=300 ./scripts/alpha.sh"
   fi
-  stop_tunnel
+  declare -F stop_tunnel >/dev/null && stop_tunnel || true
   return 1
 }
 
