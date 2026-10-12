@@ -7,8 +7,9 @@ import pytest
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
 from aiogram.client.session.base import BaseSession
-from aiogram.methods import AnswerCallbackQuery, EditMessageReplyMarkup, EditMessageText, SendMessage
-from aiogram.types import CallbackQuery, Chat, Location, Message, Update, User
+from aiogram.methods import (AnswerCallbackQuery, EditMessageCaption, EditMessageReplyMarkup, EditMessageText,
+                             SendMessage, SendPhoto)
+from aiogram.types import CallbackQuery, Chat, Location, Message, PhotoSize, Update, User
 
 from gigo import config
 from gigo.bot.handlers import make_dispatcher
@@ -33,8 +34,18 @@ class FakeSession(BaseSession):
             mid = next(_ids)
             self.messages[mid] = {"chat": method.chat_id, "text": method.text, "markup": method.reply_markup}
             return _message(mid, method.chat_id, method.text, method.reply_markup, bot_id=bot.id)
+        if isinstance(method, SendPhoto):
+            mid = next(_ids)
+            self.messages[mid] = {"chat": method.chat_id, "text": method.caption, "markup": method.reply_markup,
+                                  "photo": method.photo}
+            return _message(mid, method.chat_id, None, method.reply_markup, bot_id=bot.id, caption=method.caption,
+                            photo=[PhotoSize(file_id=f"photo{mid}", file_unique_id=f"u{mid}", width=1280, height=640)])
         if isinstance(method, EditMessageText):
+            assert not self.messages[method.message_id].get("photo"), "у сообщения с баннером меняют подпись"
             self.messages[method.message_id].update(text=method.text, markup=method.reply_markup)
+            return True
+        if isinstance(method, EditMessageCaption):
+            self.messages[method.message_id].update(text=method.caption, markup=method.reply_markup)
             return True
         if isinstance(method, EditMessageReplyMarkup):
             self.messages[method.message_id]["markup"] = method.reply_markup
@@ -90,7 +101,11 @@ class Chat_:
             for row in getattr(markup, "inline_keyboard", []) or []:
                 for b in row:
                     if b.text == label and b.callback_data:
-                        msg = _message(m["id"], self.id, m["text"], markup, bot_id=self.env.bot.id)
+                        if m.get("photo"):
+                            msg = _message(m["id"], self.id, None, markup, bot_id=self.env.bot.id, caption=m["text"],
+                                           photo=[PhotoSize(file_id="p", file_unique_id="u", width=1, height=1)])
+                        else:
+                            msg = _message(m["id"], self.id, m["text"], markup, bot_id=self.env.bot.id)
                         call = CallbackQuery(id=str(next(_ids)), from_user=self.user, chat_instance="ci",
                                              message=msg, data=b.callback_data)
                         await self.env.dp.feed_update(self.env.bot, Update(update_id=next(_ids), callback_query=call))
@@ -331,3 +346,48 @@ async def test_banned_and_stale_buttons(env):
     await env.pool.execute("UPDATE users SET banned_at = now() WHERE tg_id = $1", WORKER)
     await me.say("/jobs")
     assert "заблокирован" in me.last()
+
+
+async def test_banners_and_custom_emoji(env, monkeypatch):
+    from gigo.bot import look
+
+    me = Chat_(env, WORKER, "Иван")
+    await me.say("/start")
+    welcome = me.inbox()[-1]
+    assert welcome.get("photo") is not None and "Что вы ищете?" in welcome["text"]
+    assert look.BANNERS.file_ids["welcome"].startswith("photo")   # второй раз уйдёт file_id, без загрузки
+    await me.press("🔎 Ищу подработку")                          # подпись у баннера меняется, а не текст
+    assert "Ищу подработку" in me.inbox()[-1]["text"]
+
+    # нет картинки: обычное сообщение
+    monkeypatch.setattr(look.BANNERS, "dir", look.BANNERS.dir / "нет")
+    look.BANNERS.file_ids.clear()
+    await me.say("/help")
+    assert me.inbox()[-1].get("photo") is None and "Ищете подработку" in me.last()
+
+    # премиум-эмодзи: подмена в тексте и на кнопках, при отказе Telegram откат на обычные
+    look.EMOJI.set({"🔎": "111", "✅": "222"})
+    env.bot.session.middleware(look.PrettyMiddleware())
+    try:
+        await me.say("/jobs")
+        m = me.inbox()[-1]
+        assert '<tg-emoji emoji-id="111">🔎</tg-emoji>' in m["text"]
+        assert look.EMOJI.html('<a href="x">✅</a> ✅') == \
+            '<a href="x"><tg-emoji emoji-id="222">✅</tg-emoji></a> <tg-emoji emoji-id="222">✅</tg-emoji>'
+        from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+        b = look.EMOJI.markup(InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="✅ Принять",
+                                                                                          callback_data="x")]]))
+        assert b.inline_keyboard[0][0].text == "Принять" and b.inline_keyboard[0][0].icon_custom_emoji_id == "222"
+
+        from aiogram.exceptions import TelegramBadRequest
+        real = env.session.make_request
+
+        async def picky(bot, method, timeout=None):
+            if "tg-emoji" in (getattr(method, "text", None) or ""):
+                raise TelegramBadRequest(method=method, message="Bad Request: custom emoji entities are not allowed")
+            return await real(bot, method, timeout)
+        monkeypatch.setattr(env.session, "make_request", picky)
+        await me.say("/jobs")
+        assert "tg-emoji" not in me.last() and look.EMOJI.enabled is False
+    finally:
+        look.EMOJI.set({})

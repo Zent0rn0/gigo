@@ -9,7 +9,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from gigo import actions, config, events, rules
-from gigo.bot.common import (ANSWER, BTN_MY, JOB_STATUS, STATUS, Kb, app, btn, job_card, note, rating_text,
+from gigo.bot import look
+from gigo.bot.common import (ANSWER, BTN_MY, JOB_STATUS, STATUS, Kb, app, btn, job_card, note, num, rating_text,
                              replace)
 from gigo.format import esc
 from gigo.jobs_query import jobs_where, responses_where
@@ -41,9 +42,10 @@ def make_router(settings: config.Settings, pool) -> Router:
             message.from_user.id,
         )
         if not rows:
-            await message.answer("Заявок пока нет. Создать: /new", reply_markup=kb([btn("➕ Создать заявку", "nj:start")]))
+            await look.show(message, "📋 <b>Ваши заявки</b>\n\n<i>Заявок пока нет.</i> Создайте первую за минуту.",
+                            kb([btn("➕ Создать заявку", "nj:start", "success")]), banner="my")
             return
-        lines = ["<b>Ваши заявки</b>"]
+        lines = ["📋 <b>Ваши заявки</b>"]
         for i, j in enumerate(rows, start=1):
             if j["status"] == "open" and j["expires_at"] <= datetime.now(timezone.utc):
                 state_text = "⌛ срок вышел"
@@ -53,10 +55,11 @@ def make_router(settings: config.Settings, pool) -> Router:
                 state_text += f" · 🙋 новых откликов: {j['pending_count']}"
             if j["accepted_count"]:
                 state_text += f" · принято {j['accepted_count']} из {j['workers_needed']}"
-            lines.append(f"{i}. {esc(j['title'])}\n    {state_text}")
+            lines.append(f"{num(i)} <b>{esc(j['title'])}</b>\n{state_text}")
         numbers = [btn(str(i), f"mj:{j['id']}") for i, j in enumerate(rows, start=1)]
-        await message.answer("\n".join(lines) + "\n\nНажмите номер, чтобы посмотреть отклики и управлять заявкой.",
-                             reply_markup=kb(numbers[:5], numbers[5:], [btn("➕ Новая заявка", "nj:start")]))
+        await look.show(message, "\n\n".join(lines) + "\n\n👇 <i>Нажмите номер, чтобы посмотреть отклики и управлять "
+                                 "заявкой.</i>",
+                        kb(numbers[:5], numbers[5:], [btn("➕ Новая заявка", "nj:start")]), banner="my")
 
     async def manage_view(user_id: int, job_id: int):
         job = await pool.fetchrow(jobs_where("j.id = $2 AND j.employer_id = $1"), user_id, job_id)
@@ -66,13 +69,13 @@ def make_router(settings: config.Settings, pool) -> Router:
         status = "⌛ срок вышел" if job["status"] == "open" and expired else JOB_STATUS[job["status"]]
         if job["hidden_at"]:
             status = "🚫 скрыта модератором"
-        text = job_card(job) + f"\n\nСтатус: {status}\nОткликов: ждут ответа {job['pending_count']}, " \
+        text = job_card(job) + f"\n\n<b>Статус:</b> {status}\n<b>Отклики:</b> ждут ответа {job['pending_count']}, " \
                                f"принято {job['accepted_count']}"
         rows = []
         if job["responses_count"] or job["pending_count"]:
             rows.append([btn(f"👥 Отклики ({job['responses_count']})", f"rl:{job_id}")])
         if job["status"] == "open" and not expired:
-            rows.append([btn("🔒 Закрыть набор", f"jc:{job_id}"), btn("❌ Отменить", f"jx:{job_id}")])
+            rows.append([btn("🔒 Закрыть набор", f"jc:{job_id}"), btn("❌ Отменить", f"jx:{job_id}", "danger")])
         elif job["status"] == "closed" and not expired and not job["hidden_at"]:
             rows.append([btn("🔓 Открыть набор снова", f"jo:{job_id}")])
         if not job["hidden_at"]:
@@ -113,7 +116,7 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def cancel_ask(call: CallbackQuery) -> None:
         job_id = call.data[3:]
         await call.message.edit_reply_markup(reply_markup=kb(
-            [btn("Да, отменить заявку", f"jxy:{job_id}")], [btn("Нет, оставить", f"mjr:{job_id}")]))
+            [btn("Да, отменить заявку", f"jxy:{job_id}", "danger")], [btn("Нет, оставить", f"mjr:{job_id}")]))
         await call.answer("Всем, кто откликнулся, придёт сообщение об отмене")
 
     @r.callback_query(F.data.regexp(r"^jxy:\d+$"))
@@ -170,19 +173,20 @@ def make_router(settings: config.Settings, pool) -> Router:
             return
         await call.answer()
         for resp in rows[:MAX_RESPONSES_SHOWN]:
-            text = f"🙋 <b>{esc(resp['worker_name'] or 'Исполнитель')}</b> · " \
+            text = f"🙋 <b>{esc(resp['worker_name'] or 'Исполнитель')}</b>\n" \
                    f"{rating_text(resp['worker_rating'], resp['worker_reviews'])}"
             if resp["worker_about"]:
                 text += f"\n<i>{esc(resp['worker_about'][:200])}</i>"
             if resp["message"]:
-                text += f"\n«{esc(resp['message'])}»"
+                text += f"\n<blockquote>«{esc(resp['message'])}»</blockquote>"
             text += f"\n{STATUS[resp['status']]}"
             if resp["status"] == "accepted":
                 text += "\nКонтакт: " + events.contact_html(resp["worker_id"], resp["worker_name"],
                                                             resp["worker_username"])
                 markup = None
             else:
-                markup = kb([btn("✅ Принять", f"acc:{resp['id']}"), btn("✖️ Отклонить", f"rej:{resp['id']}")])
+                markup = kb([btn("✅ Принять", f"acc:{resp['id']}", "success"),
+                             btn("✖️ Отклонить", f"rej:{resp['id']}", "danger")])
             await call.message.answer(text, reply_markup=markup)
         if len(rows) > MAX_RESPONSES_SHOWN:
             await call.message.answer(f"И ещё {len(rows) - MAX_RESPONSES_SHOWN}: все отклики в приложении.",

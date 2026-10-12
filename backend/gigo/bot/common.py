@@ -6,6 +6,7 @@ from aiogram import BaseMiddleware, F
 from aiogram.types import CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup
 
 from gigo import config
+from gigo.bot.look import edit
 from gigo.bot.loops import keyboard
 from gigo.categories import CATEGORIES
 from gigo.format import esc, job_message
@@ -49,8 +50,9 @@ class Kb:
         return keyboard(self.settings, [r for r in rows if r])
 
 
-def btn(text: str, data: str) -> dict:
-    return {"text": text, "data": data}
+def btn(text: str, data: str, style: str | None = None) -> dict:
+    """style: success (зелёная), danger (красная), primary (синяя)."""
+    return {"text": text, "data": data, **({"style": style} if style else {})}
 
 
 def app(text: str, path: str = "") -> dict:
@@ -66,6 +68,13 @@ def rating_text(rating, count) -> str:
     return f"★ {rating} ({count})" if count else "пока без отзывов"
 
 
+NUMBERS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+
+
+def num(n: int) -> str:
+    return NUMBERS[n - 1] if 1 <= n <= len(NUMBERS) else f"{n}."
+
+
 def job_card(job, distance_km: float | None = None) -> str:
     """Подробная карточка заявки для чата."""
     lines = [job_message(job, job["metro_name"])]
@@ -74,19 +83,20 @@ def job_card(job, distance_km: float | None = None) -> str:
     if distance_km is not None:
         lines.append(f"🚶 {distance_km:.1f} км от вас")
     if job["description"]:
-        lines.append(f"\n{esc(job['description'])}")
-    need = job["workers_needed"]
-    lines.append(f"\n👥 Нужно: {need} · принято: {job['accepted_count']}")
-    lines.append(f"👤 Заказчик: {esc(job['employer_name'] or 'без имени')} · "
+        lines.append(f"\n<blockquote expandable>{esc(job['description'])}</blockquote>")
+    else:
+        lines.append("")
+    lines.append(f"👥 Нужно: <b>{job['workers_needed']}</b> · принято: {job['accepted_count']}")
+    lines.append(f"👤 {esc(job['employer_name'] or 'Заказчик')} · "
                  f"{rating_text(job['employer_rating'], job['employer_reviews'])}")
     return "\n".join(lines)
 
 
 def short_line(n: int, job, distance_km: float | None = None) -> str:
-    """Строка заявки в списке."""
+    """Заявка в списке: номер, название и одна строка условий."""
     label, emoji = CATEGORIES.get(job["category"], CATEGORIES["other"])
-    head = f"{n}. {emoji} <b>{esc(job['title'])}</b>"
-    rest = job_message(job, job["metro_name"]).split("\n")[1:]
+    head = f"{num(n)} {emoji} <b>{esc(job['title'])}</b>"
+    rest = [line for line in job_message(job, job["metro_name"]).split("\n")[2:] if line.strip()]
     if distance_km is not None:
         rest.append(f"🚶 {distance_km:.1f} км")
     return head + ("\n" + " · ".join(rest) if rest else "")
@@ -95,7 +105,7 @@ def short_line(n: int, job, distance_km: float | None = None) -> str:
 async def note(call: CallbackQuery, text: str, markup=None) -> None:
     """Дописывает итог в сообщение с кнопками и меняет кнопки."""
     try:
-        await call.message.edit_text(f"{call.message.html_text}\n\n<b>{text}</b>", reply_markup=markup)
+        await edit(call.message, f"{call.message.html_text}\n\n<b>{text}</b>", markup)
     except Exception as e:  # сообщение могло быть старым или уже изменённым
         log.info("не удалось обновить сообщение: %s", e)
 
@@ -103,7 +113,7 @@ async def note(call: CallbackQuery, text: str, markup=None) -> None:
 async def replace(call: CallbackQuery, text: str, markup=None) -> None:
     """Заменяет текст и кнопки сообщения, а если нельзя (старое сообщение), присылает новое."""
     try:
-        await call.message.edit_text(text, reply_markup=markup)
+        await edit(call.message, text, markup)
     except Exception as e:
         if "not modified" not in str(e):
             await call.message.answer(text, reply_markup=markup)

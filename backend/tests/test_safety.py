@@ -114,8 +114,8 @@ async def test_accept_from_bot_buttons(client, pool):
     resp = (await client.post(f"/api/jobs/{job['id']}/responses", json={"message": "Готов"})).json()
     row = await pool.fetchrow("SELECT text, buttons FROM outbox WHERE user_id = $1", EMPLOYER)
     buttons = json.loads(row["buttons"])
-    assert buttons[0] == [{"text": "✅ Принять", "data": f"acc:{resp['id']}"},
-                          {"text": "✖️ Отклонить", "data": f"rej:{resp['id']}"}]
+    assert [(b["text"], b["data"]) for b in buttons[0]] == [("✅ Принять", f"acc:{resp['id']}"),
+                                                            ("✖️ Отклонить", f"rej:{resp['id']}")]
     assert "пока без отзывов" in row["text"] and "«Готов»" in row["text"]
 
     settings = config.load()
@@ -146,7 +146,7 @@ async def test_reminder_and_review_requests(client, pool):
     await pool.execute("UPDATE jobs SET starts_at = $2, duration_hours = 4 WHERE id = $1", job["id"], soon)
     assert await remind_once(pool) == 1
     assert await remind_once(pool) == 0
-    assert "Напоминание" in await pool.fetchval("SELECT text FROM outbox WHERE user_id = $1", WORKER)
+    assert "Скоро работа" in await pool.fetchval("SELECT text FROM outbox WHERE user_id = $1", WORKER)
 
     # работа закончилась: обе стороны просим оценить, кто уже оценил — не просим
     await client.post("/api/reviews", json={"response_id": resp["id"], "rating": 5})
