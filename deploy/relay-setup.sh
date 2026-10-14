@@ -59,6 +59,7 @@ ufw --force enable
 systemctl enable --now fail2ban
 if [ -s /root/.ssh/authorized_keys ]; then
   printf 'PasswordAuthentication no\nKbdInteractiveAuthentication no\n' > /etc/ssh/sshd_config.d/99-gigo.conf
+  mkdir -p /run/sshd
   sshd -t && (systemctl reload ssh 2>/dev/null || systemctl reload sshd)
   echo "Вход по SSH только по ключу"
 fi
