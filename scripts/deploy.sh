@@ -88,17 +88,33 @@ if [ "$(env_get POSTGRES_PASSWORD)" = gigo ] || [ -z "$(env_get POSTGRES_PASSWOR
   fi
 fi
 
-# Имя бота для ссылок «Поделиться»: спрашиваем у Telegram по токену.
-if [ -z "$(env_get VITE_BOT_USERNAME)" ]; then
-  NAME="$(curl -fs "https://api.telegram.org/bot$(env_get BOT_TOKEN)/getMe" \
-    | grep -Eo '"username":"[^"]+"' | head -1 | cut -d'"' -f4 || true)"
-  if [ -n "$NAME" ]; then
-    env_set VITE_BOT_USERNAME "$NAME"
-    echo "Бот: @$NAME"
-  else
-    warn "Telegram не узнал токен бота. Проверьте BOT_TOKEN в .env."
-  fi
+# Связь с Telegram. С российских серверов api.telegram.org недоступен, тогда бот ходит через ретранслятор
+# за рубежом (deploy/relay-setup.sh), его адрес в TELEGRAM_API_URL.
+tg_check() {
+  TG_BASE="$(env_get TELEGRAM_API_URL)"; TG_BASE="${TG_BASE%/}"; TG_BASE="${TG_BASE:-https://api.telegram.org}"
+  TG_CODE="$(curl -s --max-time 10 -o "$ROOT/.getme.json" -w '%{http_code}' "$TG_BASE/bot$(env_get BOT_TOKEN)/getMe" || true)"
+}
+tg_check
+if [ "$TG_CODE" = 000 ] && [ -z "$(env_get TELEGRAM_API_URL)" ]; then
+  warn "С этого сервера Telegram недоступен (так у российских хостингов). Боту нужен ретранслятор за рубежом,"
+  warn "как его поставить: docs/deploy.md, раздел «Ретранслятор Telegram»."
+  ask TELEGRAM_API_URL "Адрес ретранслятора, например https://tg.вашдомен.ru (Enter, если ещё не готов)"
+  [ -n "$(env_get TELEGRAM_API_URL)" ] && tg_check
 fi
+case "$TG_CODE" in
+  200)
+    echo "Связь с Telegram есть ($TG_BASE)"
+    NAME="$(grep -Eo '"username":"[^"]+"' "$ROOT/.getme.json" | head -1 | cut -d'"' -f4 || true)"
+    if [ -n "$NAME" ] && [ "$(env_get VITE_BOT_USERNAME)" != "$NAME" ]; then
+      env_set VITE_BOT_USERNAME "$NAME"
+      echo "Бот: @$NAME"
+    fi ;;
+  401|404) warn "Telegram не узнал токен бота. Проверьте BOT_TOKEN в .env." ;;
+  403) warn "Ретранслятор $TG_BASE не пускает этот сервер: перезапустите relay-setup.sh на ретрансляторе с IP $(curl -4 -fs --max-time 5 https://api.ipify.org || echo 'этого сервера')." ;;
+  000) warn "Нет связи с Telegram через $TG_BASE: бот не заработает, пока она не появится. Сайт и API запустятся." ;;
+  *) warn "Telegram ответил кодом $TG_CODE через $TG_BASE. Если это ретранслятор, проверьте, что в нём указан IP этого сервера." ;;
+esac
+rm -f "$ROOT/.getme.json"
 
 say "3/6 Домен смотрит на этот сервер?"
 MY_IP="$(curl -4 -fs --max-time 5 https://api.ipify.org || curl -4 -fs --max-time 5 https://ifconfig.me || true)"
