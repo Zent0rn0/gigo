@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 
 from aiogram import Bot
 from aiogram.client.default import DefaultBotProperties
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
 from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 
 from gigo import config, db
@@ -42,7 +44,12 @@ async def run() -> None:
         raise SystemExit("Не задан BOT_TOKEN: получите его у @BotFather и впишите в .env")
     await migrate(settings.database_url)
     pool = await db.connect(settings.database_url)
-    bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode="HTML"))
+    session = None
+    # С российских серверов api.telegram.org недоступен: бот ходит через ретранслятор за рубежом (deploy/relay-setup.sh).
+    if api_url := os.getenv("TELEGRAM_API_URL", "").strip().rstrip("/"):
+        session = AiohttpSession(api=TelegramAPIServer.from_base(api_url))
+        log.info("Telegram API через %s", api_url)
+    bot = Bot(settings.bot_token, session=session, default=DefaultBotProperties(parse_mode="HTML"))
     bot.session.middleware(look.PrettyMiddleware())
     if sets := [s for s in os.getenv("CUSTOM_EMOJI_SETS", "").replace(" ", "").split(",") if s]:
         n = await look.load_custom_emoji(bot, sets)
