@@ -1,71 +1,206 @@
 # Деплой на сервер
 
-Один VPS: 2 ядра, 2–4 ГБ памяти, Ubuntu 24.04. Всё запускается одним `docker compose`; HTTPS-сертификат Caddy получает сам.
+Пошагово, от покупки сервера до работающего бота на своём домене. Займёт около часа, большая часть уходит на ожидание
+DNS. Всё запускается одним `docker compose`: база, API, бот и Caddy, который сам получает HTTPS-сертификат.
 
-## 1. Сервер и домен
+Коротко:
 
-1. Арендуйте VPS, зайдите по SSH.
-2. Направьте домен (например `gigo.example.ru`) A-записью на IP сервера.
-3. Установите Docker:
+1. SSH-ключ на своём компьютере.
+2. Сервер: Ubuntu 24.04, 2 ядра, 2–4 ГБ памяти, в России.
+3. Домен и A-запись на IP сервера.
+4. `deploy/server-setup.sh` на сервере (один раз): Docker, фаервол, защита SSH, пользователь `gigo`, код проекта.
+5. `scripts/deploy.sh`: спрашивает токен и домен, запускает всё, проверяет HTTPS, включает ночные копии базы.
+6. В @BotFather указать адрес Mini App. Остановить альфу на Mac.
+
+## 0. Какой сервер
+
+Нужно: 2 vCPU, 2–4 ГБ RAM, 30+ ГБ NVMe, Ubuntu 24.04, публичный IPv4. Сервер в России: пользователи в Москве
+(короткий отклик), а персональные данные граждан РФ по 152-ФЗ должны храниться в РФ. Оплата российской картой или СБП.
+
+| | Конфигурация | Цена | Где |
+|---|---|---|---|
+| **Beget VPS** (рекомендую) | 2 vCPU, 4 ГБ, 40 ГБ NVMe | 33 ₽/день + IPv4 5 ₽/день ≈ **1 140 ₽/мес** | [beget.com/ru/vps](https://beget.com/ru/vps), Санкт-Петербург |
+| Beget VPS, минимум | 2 vCPU, 2 ГБ, 30 ГБ NVMe | 27 + 5 ₽/день ≈ 960 ₽/мес | то же |
+| Timeweb Cloud | 2 vCPU, 4 ГБ, 50 ГБ NVMe | ≈ 1 200 ₽/мес | [timeweb.cloud](https://timeweb.cloud/services/cloud-servers), Москва |
+
+Цены на октябрь 2026, перед покупкой сверьте на сайте. Почему Beget: посуточное списание (можно попробовать за пару
+сотен рублей и удалить), оплата картой РФ и СБП, там же можно купить домен и управлять DNS. 4 ГБ берите, если не жалко
+180 ₽ в месяц: сборка Mini App и PostGIS вместе занимают 1,5–2 ГБ. На 2 ГБ тоже работает, скрипт добавит файл подкачки.
+
+## 1. SSH-ключ (на Mac, один раз)
+
+SSH-ключ это «электронный ключ от сервера», надёжнее пароля. В Терминале на Mac:
 
 ```bash
-curl -fsSL https://get.docker.com | sh
+ls ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519 -C "gigo"   # на все вопросы просто Enter
+cat ~/.ssh/id_ed25519.pub                                      # эту строку скопируйте
 ```
 
-## 2. Код и настройки
+## 2. Сервер
+
+1. Зарегистрируйтесь у хостера, пополните баланс.
+2. Создайте VPS: **Ubuntu 24.04** (чистая система; образ «с Docker» тоже подойдёт), конфигурация из таблицы выше.
+3. В разделе SSH-ключей при создании вставьте строку из шага 1. Если такого поля нет, ничего страшного: на почту
+   придёт пароль root, а ключ добавим командой ниже.
+4. Запишите **IP-адрес** сервера (например `185.12.34.56`).
+
+Проверьте вход с Mac:
 
 ```bash
-git clone https://github.com/<вы>/gigo.git && cd gigo
-cp .env.example .env && nano .env
+ssh root@185.12.34.56          # «Are you sure…?» → yes
+# если вход был по паролю, добавьте ключ и перезайдите уже без пароля:
+exit
+ssh-copy-id root@185.12.34.56
 ```
 
-В `.env` для сервера обязательно:
+## 3. Домен
 
-| Переменная | Значение |
+1. Купите домен, например у того же Beget ([beget.com/ru/domains](https://beget.com/ru/domains)): `.ru` или `.рф`
+   199 ₽ за первый год, продление 420 ₽. Регистратор попросит подтвердить личность (обычно через Госуслуги), иначе
+   домен не заработает.
+2. В управлении DNS домена создайте **A-запись**: имя `@` (сам домен), значение `IP сервера`. Если хотите приложение
+   на поддомене (`app.вашдомен.ru`), имя записи `app`.
+3. Проверьте с Mac (обычно 5–30 минут, иногда до нескольких часов):
+
+```bash
+dig +short вашдомен.ru         # должен вывести IP сервера
+```
+
+Пока DNS обновляется, можно делать шаг 4.
+
+## 4. Настройка сервера (один раз)
+
+```bash
+ssh root@185.12.34.56
+curl -fsSL https://raw.githubusercontent.com/Zent0rn0/gigo/main/deploy/server-setup.sh | bash
+```
+
+Скрипт ([deploy/server-setup.sh](../deploy/server-setup.sh)) обновит систему и включит автообновления безопасности,
+поставит Docker (с зеркалом образов, если Docker Hub недоступен из РФ), фаервол (открыты только SSH, 80, 443),
+fail2ban от подбора паролей, файл подкачки, создаст пользователя `gigo` с вашим ключом, запретит вход по паролю и под
+root, и скачает проект в `/home/gigo/gigo`.
+
+Дальше работаем под `gigo`:
+
+```bash
+exit
+ssh gigo@185.12.34.56
+```
+
+## 5. Запуск
+
+Сначала **остановите альфу на Mac** (Ctrl+C в окне `scripts/alpha.sh`): один токен бота не может работать в двух
+местах сразу, бот на сервере будет падать с `TelegramConflictError`, пока альфа запущена.
+
+На сервере:
+
+```bash
+cd ~/gigo && ./scripts/deploy.sh
+```
+
+Скрипт ([scripts/deploy.sh](../scripts/deploy.sh)) спросит:
+
+| Вопрос | Где взять |
 |---|---|
-| `BOT_TOKEN` | токен бота |
-| `YANDEX_GEOCODER_KEY`, `VITE_YANDEX_MAPS_KEY` | карты |
-| `DOMAIN` | `gigo.example.ru` |
-| `WEBAPP_URL` | `https://gigo.example.ru` |
-| `POSTGRES_PASSWORD` | длинный случайный пароль |
-| `ADMIN_IDS` | ваш Telegram id (модератор) |
-| `DEV_AUTH` | `0` |
+| Токен бота | @BotFather → /mybots → бот → API Token. Тот же, что в `.env` на Mac |
+| Домен | из шага 3, без `https://` |
+| Ключ JavaScript API Яндекс Карт | developer.tech.yandex.ru, тот же, что на Mac (`VITE_YANDEX_MAPS_KEY`) |
+| Ключ HTTP Геокодера | там же (`YANDEX_GEOCODER_KEY`) |
+| Telegram id модератора | @userinfobot |
 
-## 3. Запуск
+Пароль базы скрипт придумает сам. Всё сохраняется в `~/gigo/.env` (только на сервере, в GitHub не попадает).
+Затем он проверит, что домен указывает на сервер, соберёт и запустит сервисы, загрузит станции метро, проверит
+`https://домен/api/health` и поставит ночную копию базы.
+
+Если у ключей Яндекс Карт в кабинете разработчика включено ограничение по HTTP Referer, добавьте туда домен.
+
+## 6. Mini App в боте
+
+В @BotFather: `/mybots` → бот → **Bot Settings** → **Configure Mini App** → **Enable Mini App** → URL
+`https://вашдомен.ru`. Кнопку меню «Gigo» бот ставит сам при старте.
+
+Проверка: откройте бота в Telegram, нажмите «Gigo». Если открылось приложение, всё готово.
+
+## 7. Перенести данные альфы (по желанию)
+
+Если на Mac уже есть настоящие заявки и пользователи, перенесите базу. Делайте сразу после шага 5, пока на сервере
+нет своих данных: восстановление заменяет базу целиком.
 
 ```bash
-docker compose --profile prod build
-docker compose up -d db
-docker compose --profile prod run --rm api python -m gigo.migrate
-docker compose --profile prod run --rm api python -m gigo.metro
+# на Mac, в папке проекта (база альфы должна быть запущена: docker compose up -d db)
+docker compose exec -T db pg_dump -U gigo --clean --if-exists gigo | gzip > alpha.sql.gz
+scp alpha.sql.gz gigo@185.12.34.56:~/gigo/
+
+# на сервере
+cd ~/gigo
+docker compose --profile prod stop api bot
+gunzip -c alpha.sql.gz | docker compose exec -T db psql -q -U gigo -d gigo
 docker compose --profile prod up -d
 ```
 
-## 4. Mini App в боте
+## Обновление
 
-В @BotFather: `/mybots` → бот → Bot Settings → Configure Mini App → Enable Mini App → URL `https://gigo.example.ru`.
-Кнопку меню «Gigo» бот ставит сам при старте, если задан `WEBAPP_URL`.
-
-## 5. Наблюдение
+Когда в `main` появились изменения:
 
 ```bash
-docker compose --profile prod ps                       # все сервисы должны быть Up, api — healthy
-docker compose --profile prod logs -f bot              # «отправлено событий: 3»
-curl https://gigo.example.ru/api/health                # {"ok": true}
+ssh gigo@185.12.34.56
+cd ~/gigo && ./scripts/deploy.sh
 ```
 
-Для оповещений о падении достаточно бесплатного внешнего мониторинга (например UptimeRobot) на `https://<домен>/api/health`.
+Скрипт подтянет код, пересоберёт и перезапустит сервисы. Миграции базы применяются сами, данные сохраняются.
 
-## 6. Обновление
+## Наблюдение
 
 ```bash
-git pull && docker compose --profile prod up -d --build
+docker compose --profile prod ps                # все Up, api — healthy
+docker compose --profile prod logs -f bot       # логи бота (Ctrl+C — выйти)
+docker compose --profile prod logs --tail 50 web   # Caddy: сертификат, запросы
+curl https://вашдомен.ru/api/health             # {"ok":true}
 ```
 
-Миграции базы применяются автоматически при старте API и бота.
+Чтобы узнать о падении раньше пользователей, заведите бесплатный монитор (например UptimeRobot) на
+`https://вашдомен.ru/api/health`.
 
-## Резервная копия базы
+## Резервные копии
+
+Каждую ночь в 4:30 копия базы ложится в `~/gigo/backups/` (хранятся 14 последних). Вручную: `./scripts/backup.sh`.
+Копии на том же сервере не спасут, если пропадёт сам сервер, поэтому иногда забирайте свежую на Mac:
 
 ```bash
-docker compose exec db pg_dump -U gigo gigo | gzip > backup-$(date +%F).sql.gz
+scp "gigo@185.12.34.56:~/gigo/backups/*.sql.gz" ~/Documents/gigo-backups/
 ```
+
+Восстановить (заменит текущие данные):
+
+```bash
+docker compose --profile prod stop api bot
+gunzip -c backups/gigo-ДАТА.sql.gz | docker compose exec -T db psql -q -U gigo -d gigo
+docker compose --profile prod up -d
+```
+
+## Если что-то не так
+
+| Что видно | Что делать |
+|---|---|
+| `https://домен` не открывается, в логах web `challenge failed` | A-запись ещё не обновилась или указывает не туда: `dig +short домен`. Caddy повторит сам |
+| Бот перезапускается, в логах `TelegramConflictError` | Бот с этим токеном запущен где-то ещё (альфа на Mac). Остановите её |
+| Бот: `Unauthorized` | Неверный `BOT_TOKEN` в `~/gigo/.env`; исправьте `nano ~/gigo/.env` и `./scripts/deploy.sh` |
+| В Mini App нет карты | Пустой `VITE_YANDEX_MAPS_KEY` или домен не разрешён в ограничениях ключа. После правки `.env` — `./scripts/deploy.sh` |
+| `Permission denied` при `docker` | Перезайдите по SSH: права группы docker действуют с нового входа |
+| Сборка падает с `Killed` | Не хватило памяти: проверьте подкачку `swapon --show` или возьмите тариф на 4 ГБ |
+| Скрипт предупредил «База уже создана с паролем gigo» | База закрыта от интернета, но пароль лучше сменить, см. ниже |
+
+Сменить пароль базы:
+
+```bash
+NEW=$(openssl rand -hex 24)
+docker compose exec -T db psql -U gigo -d gigo -c "ALTER USER gigo PASSWORD '$NEW'"
+sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$NEW|; s|^DATABASE_URL=.*|DATABASE_URL=postgresql://gigo:$NEW@db:5432/gigo|" .env
+SKIP_PULL=1 ./scripts/deploy.sh
+```
+
+## Персональные данные
+
+Сервер в РФ закрывает требование о локализации данных граждан РФ (152-ФЗ). Когда Gigo выйдет из альфы, сервису как
+оператору персональных данных нужно ещё подать уведомление в Роскомнадзор (pd.rkn.gov.ru) и опубликовать политику
+обработки данных. Это юридический шаг, его лучше сверить со специалистом.
