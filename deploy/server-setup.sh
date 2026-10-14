@@ -93,6 +93,7 @@ PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin no
 CONF
+  mkdir -p /run/sshd
   sshd -t && (systemctl reload ssh 2>/dev/null || systemctl reload sshd)
   echo "Вход только по ключу, под пользователем $APP_USER: ssh $APP_USER@<IP>"
 else
