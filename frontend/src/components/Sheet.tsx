@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Icon } from './Icon';
+import { t } from '../i18n';
 
 interface Props {
   title: string;
@@ -47,7 +48,7 @@ export function Sheet({ title, onClose, children, footer }: Props) {
           <h2 className="sheet__title" id={titleId}>
             {title}
           </h2>
-          <button type="button" className="icon-btn" onClick={onClose} aria-label="Закрыть" title="Закрыть">
+          <button type="button" className="icon-btn" onClick={onClose} aria-label={t('Закрыть')} title={t('Закрыть')}>
             <Icon name="x" size={20} />
           </button>
         </div>

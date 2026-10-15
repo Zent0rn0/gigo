@@ -15,6 +15,7 @@ import {
 import { Icon, categoryIcon } from './Icon';
 import { MetroDot } from './MetroDot';
 import { RatingText, StatusChip } from './ui';
+import { t } from '../i18n';
 
 interface Props {
   job: Job;
@@ -46,7 +47,7 @@ export function JobCard({ job, category, onOpen, owner, footer, preview }: Props
 
   const foot = owner ? (
     <div className="job-card__foot">
-      <StatusChip tone={JOB_STATE_TONE[state]}>{JOB_STATE_LABEL[state]}</StatusChip>
+      <StatusChip tone={JOB_STATE_TONE[state]}>{t(JOB_STATE_LABEL[state])}</StatusChip>
       {pending > 0 ? (
         <span className="badge badge--brand">
           <Icon name="inbox" size={14} strokeWidth={2.2} />
@@ -54,7 +55,7 @@ export function JobCard({ job, category, onOpen, owner, footer, preview }: Props
         </span>
       ) : (
         <span className="hint small">
-          {job.responses_count ? `${job.responses_count} ${plural(job.responses_count, ['отклик', 'отклика', 'откликов'])}` : 'откликов пока нет'}
+          {job.responses_count ? `${job.responses_count} ${plural(job.responses_count, ['отклик', 'отклика', 'откликов'])}` : t('откликов пока нет')}
         </span>
       )}
     </div>
@@ -65,17 +66,17 @@ export function JobCard({ job, category, onOpen, owner, footer, preview }: Props
           {job.employer.first_name} · <RatingText rating={job.employer.rating} count={job.employer.reviews_count} />
         </span>
         {job.is_mine ? (
-          <StatusChip tone="muted">Ваша заявка</StatusChip>
+          <StatusChip tone="muted">{t('Ваша заявка')}</StatusChip>
         ) : isActiveResponse(job.my_response) ? (
           <StatusChip tone={job.my_response!.status === 'accepted' ? 'ok' : 'wait'} icon="check">
-            {job.my_response!.status === 'accepted' ? 'Вас выбрали' : 'Вы откликнулись'}
+            {job.my_response!.status === 'accepted' ? t('Вас выбрали') : t('Вы откликнулись')}
           </StatusChip>
         ) : job.is_invited ? (
           <StatusChip tone="ok" icon="send">
-            Вас пригласили
+            {t('Вас пригласили')}
           </StatusChip>
         ) : (
-          <span className="job-card__age">{preview ? 'только что' : formatAge(job.created_at)}</span>
+          <span className="job-card__age">{preview ? t('только что') : formatAge(job.created_at)}</span>
         )}
       </div>
     )
@@ -88,8 +89,8 @@ export function JobCard({ job, category, onOpen, owner, footer, preview }: Props
         <div className="job-card__head">
           <span className="job-card__title">{job.title}</span>
           <div className="job-card__pay">
-            {pay ? <span className="pay">{pay}</span> : <span className="pay pay--none">оплата не указана</span>}
-            {total && <span className="pay-total">{total} за всё</span>}
+            {pay ? <span className="pay">{pay}</span> : <span className="pay pay--none">{t('оплата не указана')}</span>}
+            {total && <span className="pay-total">{t('{total} за всё', { total })}</span>}
           </div>
         </div>
       </div>
@@ -121,7 +122,7 @@ export function JobCard({ job, category, onOpen, owner, footer, preview }: Props
         {job.workers_needed != null && job.workers_needed > 1 && (
           <span className="meta-item">
             <Icon name="users" size={15} />
-            {job.workers_needed} чел.
+            {t('{n} чел.', { n: job.workers_needed })}
           </span>
         )}
       </div>

@@ -10,9 +10,10 @@ from aiogram import Bot
 from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, TelegramRetryAfter
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-from gigo import config, events
+from gigo import config, events, i18n
 from gigo.bot import look, safety
 from gigo.format import job_message
+from gigo.i18n import tr
 from gigo.rules import MSK
 
 log = logging.getLogger("gigo.bot")
@@ -25,7 +26,7 @@ MATCHES_SQL = """
 SELECT DISTINCT ON (j.id, s.user_id)
        j.id, j.category, j.title, j.pay_per_hour, j.pay_estimated, j.pay_total, j.pay_amount, j.pay_unit,
        j.pay_timing, j.starts_on, j.starts_at, j.duration_hours, j.address,
-       m.name AS metro_name, s.user_id, s.id AS subscription_id, s.name AS subscription_name
+       m.name AS metro_name, s.user_id, s.id AS subscription_id, s.name AS subscription_name, u.lang
 FROM jobs j
 JOIN subscriptions s ON s.enabled
 JOIN users u ON u.tg_id = s.user_id AND NOT u.bot_blocked AND u.banned_at IS NULL
@@ -122,10 +123,12 @@ async def notify_once(bot: Bot, pool, settings: config.Settings, since: datetime
         if not claimed:
             continue
         try:
-            result = await _send(bot, pool, r["user_id"], job_message(r, r["metro_name"], r["subscription_name"]),
-                                 keyboard(settings, [[{"text": "🙋 Откликнуться", "data": f"ap:{r['id']}"},
-                                                      {"text": "📄 Подробнее", "data": f"job:{r['id']}"}],
-                                                     [{"text": "Открыть в приложении", "path": f"?job={r['id']}"}]]))
+            with i18n.using(r["lang"]):  # на языке подписчика
+                text = job_message(r, r["metro_name"], r["subscription_name"])
+                markup = keyboard(settings, [[{"text": tr("🙋 Откликнуться"), "data": f"ap:{r['id']}"},
+                                              {"text": tr("📄 Подробнее"), "data": f"job:{r['id']}"}],
+                                             [{"text": tr("Открыть в приложении"), "path": f"?job={r['id']}"}]])
+            result = await _send(bot, pool, r["user_id"], text, markup)
         except Exception:
             log.exception("заявка %s для %s не отправилась", r["id"], r["user_id"])
             result = FAILED   # уведомление о новой заявке не критично: второй раз не пытаемся
@@ -200,7 +203,9 @@ async def remind_once(pool) -> int:
     async with pool.acquire() as conn, conn.transaction():
         for r in await conn.fetch(REMIND_SQL + " FOR UPDATE OF r SKIP LOCKED", REMIND_BEFORE_HOURS):
             job = {"id": r["job_id"], "title": r["title"]}
-            await events.reminder(conn, r["worker_id"], job, f"начинается в {r['starts_at'].astimezone(MSK):%H:%M}")
+            with i18n.using(await i18n.user_lang(conn, r["worker_id"])):
+                when = tr("начинается в {time}", time=f"{r['starts_at'].astimezone(MSK):%H:%M}")
+            await events.reminder(conn, r["worker_id"], job, when)
             await conn.execute("UPDATE responses SET reminded_at = now() WHERE id = $1", r["id"])
             n += 1
         for r in await conn.fetch(REVIEW_SQL + " FOR UPDATE OF r SKIP LOCKED"):

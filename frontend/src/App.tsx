@@ -1,3 +1,4 @@
+import { getLang, setLang, t, N_ } from './i18n';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ApiError, api, errorText, onBlocked } from './api';
 import { ROLE_TABS, TabBar, type Tab } from './components/TabBar';
@@ -30,15 +31,15 @@ type OverlayInit =
 type Overlay = OverlayInit & { key: number; pushed: boolean };
 
 function initialTab(role: Role): Tab {
-  const t = deepLinkTab();
-  return t && ROLE_TABS[role].includes(t) ? t : ROLE_TABS[role][0];
+  const dl = deepLinkTab();
+  return dl && ROLE_TABS[role].includes(dl) ? dl : ROLE_TABS[role][0];
 }
 
 /** Подсказка, если ссылка из бота ведёт во вкладку другой роли. */
 const WRONG_ROLE_TAB: Record<string, string> = {
-  responses: 'Отклики видны в роли исполнителя. Сменить роль можно в профиле.',
-  my: 'Мои заявки видны в роли заказчика. Сменить роль можно в профиле.',
-  create: 'Создавать заявки может заказчик. Сменить роль можно в профиле.',
+  responses: N_('Отклики видны в роли исполнителя. Сменить роль можно в профиле.'),
+  my: N_('Мои заявки видны в роли заказчика. Сменить роль можно в профиле.'),
+  create: N_('Создавать заявки может заказчик. Сменить роль можно в профиле.'),
 };
 
 function dropQuery(...keys: string[]) {
@@ -99,14 +100,14 @@ export function App() {
   }, []);
   useEffect(() => {
     if (!toastText) return;
-    const t = window.setTimeout(() => setToastText(null), 3500);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => setToastText(null), 3500);
+    return () => window.clearTimeout(timer);
   }, [toastText]);
 
   const enterRole = useCallback((role: Role, first: boolean) => {
-    const t = first ? initialTab(role) : ROLE_TABS[role][0];
-    setTab(t);
-    setVisited(new Set<Tab>([t]));
+    const start = first ? initialTab(role) : ROLE_TABS[role][0];
+    setTab(start);
+    setVisited(new Set<Tab>([start]));
   }, []);
 
   // справочники и текущий пользователь
@@ -114,12 +115,17 @@ export function App() {
     setBootError('');
     Promise.all([api.meta(), api.me()])
       .then(([m, u]) => {
+        if (u.lang && u.lang !== getLang()) {
+          // язык в профиле другой: переключаемся, приложение пересоберётся и загрузит всё на нём
+          void setLang(u.lang);
+          return;
+        }
         setMeta(m);
         setMe(u);
         if (u.role) {
           enterRole(u.role, true);
-          const t = deepLinkTab();
-          if (t && !ROLE_TABS[u.role].includes(t) && WRONG_ROLE_TAB[t]) toast(WRONG_ROLE_TAB[t]);
+          const dl = deepLinkTab();
+          if (dl && !ROLE_TABS[u.role].includes(dl) && WRONG_ROLE_TAB[dl]) toast(t(WRONG_ROLE_TAB[dl]));
         }
       })
       .catch((e) => setBootError(errorText(e)));
@@ -158,7 +164,7 @@ export function App() {
     }
     const p = location ?? (await locate());
     if (p) setFilters((f) => ({ ...f, nearMe: true }));
-    else toast('Не удалось определить, где вы. Разрешите доступ к геопозиции и попробуйте снова.');
+    else toast(t('Не удалось определить, где вы. Разрешите доступ к геопозиции и попробуйте снова.'));
   }, [filters.nearMe, location, locate, toast]);
 
   // ——— навигация ———
@@ -236,16 +242,16 @@ export function App() {
   }, [hasOverlay, pop]);
 
   const switchTab = useCallback(
-    (t: Tab) => {
-      if (t === tab) {
+    (next: Tab) => {
+      if (next === tab) {
         window.scrollTo({ top: 0, behavior: 'smooth' });
         return;
       }
       haptic('select');
       tabScroll.current[tab] = window.scrollY;
       dropQuery('tab');
-      setVisited((v) => (v.has(t) ? v : new Set(v).add(t)));
-      setTab(t);
+      setVisited((v) => (v.has(next) ? v : new Set(v).add(next)));
+      setTab(next);
     },
     [tab],
   );
@@ -272,7 +278,7 @@ export function App() {
         haptic('success');
         setMe(upd);
         enterRole(role, false);
-        toast(role === 'worker' ? 'Теперь вы исполнитель: смотрите заявки и откликайтесь' : 'Теперь вы заказчик: создайте заявку');
+        toast(role === 'worker' ? t('Теперь вы исполнитель: смотрите заявки и откликайтесь') : t('Теперь вы заказчик: создайте заявку'));
       } catch (e) {
         haptic('error');
         toast(errorText(e));
@@ -285,7 +291,7 @@ export function App() {
     <>
       {!online && (
         <div className="offline" role="status">
-          Нет интернета. Показываем то, что успели загрузить.
+          {t('Нет интернета. Показываем то, что успели загрузить.')}
         </div>
       )}
       {toastText && (
@@ -302,13 +308,13 @@ export function App() {
         <EmptyState
           icon="ban"
           tone="danger"
-          title="Доступ ограничен"
+          title={t('Доступ ограничен')}
           text={
             <>
               {blocked}
               <br />
               <br />
-              Если считаете, что это ошибка, напишите об этом боту Gigo в чате.
+              {t('Если считаете, что это ошибка, напишите об этом боту Gigo в чате.')}
             </>
           }
         />
@@ -352,8 +358,8 @@ export function App() {
 
   const role = me.role;
   const tabs = ROLE_TABS[role];
-  const shown = (t: Tab) => tabs.includes(t) && visited.has(t);
-  const on = (t: Tab) => tab === t && !hasOverlay;
+  const shown = (x: Tab) => tabs.includes(x) && visited.has(x);
+  const on = (x: Tab) => tab === x && !hasOverlay;
 
   return (
     <div className="app">

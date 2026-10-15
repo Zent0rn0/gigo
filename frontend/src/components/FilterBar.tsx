@@ -7,6 +7,7 @@ import { Icon, categoryIcon } from './Icon';
 import { MetroDot } from './MetroDot';
 import { MetroPicker } from './MetroPicker';
 import { Sheet } from './Sheet';
+import { t } from '../i18n';
 
 interface Props {
   meta: Meta;
@@ -30,18 +31,18 @@ export function FilterBar({ meta, filters, locating, onChange, onToggleNear }: P
 
   const selectedMetro = filters.metro.map((id) => meta.metro.find((m) => m.id === id)).filter(Boolean);
   const metroLabel =
-    selectedMetro.length === 0 ? 'Метро' : selectedMetro.length === 1 ? selectedMetro[0]!.name : `Метро · ${selectedMetro.length}`;
+    selectedMetro.length === 0 ? t('Метро') : selectedMetro.length === 1 ? selectedMetro[0]!.name : t('Метро · {n}', { n: selectedMetro.length });
 
   return (
     <div className="filters">
-      <div className="chips chips--scroll" role="group" aria-label="Категории">
+      <div className="chips chips--scroll" role="group" aria-label={t('Категории')}>
         <button
           type="button"
           className={`chip${filters.categories.length === 0 ? ' chip--on' : ''}`}
           aria-pressed={filters.categories.length === 0}
           onClick={() => set({ categories: [] })}
         >
-          Все
+          {t('Все')}
         </button>
         {meta.categories.map((c) => {
           const on = filters.categories.includes(c.id);
@@ -54,7 +55,7 @@ export function FilterBar({ meta, filters, locating, onChange, onToggleNear }: P
         })}
       </div>
 
-      <div className="chips chips--scroll" role="group" aria-label="Фильтры">
+      <div className="chips chips--scroll" role="group" aria-label={t('Фильтры')}>
         <button
           type="button"
           className={`chip${filters.nearMe ? ' chip--on' : ''}`}
@@ -63,11 +64,11 @@ export function FilterBar({ meta, filters, locating, onChange, onToggleNear }: P
           disabled={locating}
         >
           {locating ? <span className="spinner spinner--xs" aria-hidden="true" /> : <Icon name="locate" size={16} />}
-          {locating ? 'Ищем вас…' : 'Рядом'}
+          {locating ? t('Ищем вас…') : t('Рядом')}
         </button>
         <button type="button" className={`chip${filters.today ? ' chip--on' : ''}`} onClick={() => set({ today: !filters.today })} aria-pressed={filters.today}>
           <Icon name="calendar" size={16} />
-          Сегодня
+          {t('Сегодня')}
         </button>
         <button
           type="button"
@@ -81,13 +82,13 @@ export function FilterBar({ meta, filters, locating, onChange, onToggleNear }: P
         </button>
         <button type="button" className={`chip${filters.payMin != null ? ' chip--on' : ''}`} onClick={() => setPayOpen(true)} aria-haspopup="dialog">
           <Icon name="ruble" size={16} />
-          {filters.payMin != null ? `от ${rub(filters.payMin)}/ч` : 'Оплата'}
+          {filters.payMin != null ? t('от {pay}/ч', { pay: rub(filters.payMin) }) : t('Оплата')}
           <Icon name="chevron-down" size={14} className="chip__caret" />
         </button>
         {!isEmptyFilter(filters) && (
           <button type="button" className="chip chip--ghost" onClick={() => set(EMPTY_FILTERS)}>
             <Icon name="x" size={14} />
-            Сбросить
+            {t('Сбросить')}
           </button>
         )}
       </div>
@@ -122,21 +123,21 @@ function PaySheet({ value, onApply, onClose }: { value: number | null; onApply(v
   const n = text.trim() === '' ? null : Number(text) || null;
   return (
     <Sheet
-      title="Оплата в час"
+      title={t('Оплата в час')}
       onClose={onClose}
       footer={
         <div className="row-gap">
           <button type="button" className="btn btn--secondary" onClick={() => onApply(null)}>
-            Любая
+            {t('Любая')}
           </button>
           <button type="button" className="btn btn--primary btn--grow" onClick={() => onApply(n)}>
-            {n ? `Показать от ${rub(n)}/ч` : 'Показать все'}
+            {n ? t('Показать от {pay}/ч', { pay: rub(n) }) : t('Показать все')}
           </button>
         </div>
       }
     >
       <div className="pay-sheet">
-        <p className="hint small">Смену и оплату за работу пересчитываем в рубли за час, чтобы заявки было легко сравнить.</p>
+        <p className="hint small">{t('Смену и оплату за работу пересчитываем в рубли за час, чтобы заявки было легко сравнить.')}</p>
         <div className="chips chips--wrap">
           {PAY_PRESETS.map((p) => (
             <button
@@ -146,17 +147,17 @@ function PaySheet({ value, onApply, onClose }: { value: number | null; onApply(v
               aria-pressed={n === p}
               onClick={() => setText(n === p ? '' : String(p))}
             >
-              от {p} ₽
+              {t('от {p} ₽', { p })}
             </button>
           ))}
         </div>
         <label className="field">
-          <span className="field__label">Своя сумма, ₽/ч от</span>
+          <span className="field__label">{t('Своя сумма, ₽/ч от')}</span>
           <input
             className="input"
             inputMode="numeric"
             pattern="[0-9]*"
-            placeholder="Любая"
+            placeholder={t('Любая')}
             value={text}
             maxLength={5}
             onChange={(e) => setText(e.target.value.replace(/\D/g, ''))}

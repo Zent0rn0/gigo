@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { loadYmaps } from '../ymaps';
 import { Icon } from './Icon';
 import { Sheet } from './Sheet';
+import { t } from '../i18n';
 
 export interface Point {
   lat: number;
@@ -49,7 +50,7 @@ export function PointPicker({ center, zoom, onClose, onApply }: Props) {
     try {
       const res = await window.ymaps.geocode([lat, lng], { kind: 'house', results: 1 });
       const obj = res.geoObjects.get(0);
-      address = obj ? obj.getAddressLine().replace(/^Россия,\s*/, '').replace(/^Москва,\s*/, '') : null;
+      address = obj ? obj.getAddressLine().replace(/^(Россия|Russia),\s*/, '').replace(/^(Москва|Moscow),\s*/, '') : null;
     } catch {
       /* без адреса тоже годится */
     }
@@ -59,16 +60,16 @@ export function PointPicker({ center, zoom, onClose, onApply }: Props) {
 
   return (
     <Sheet
-      title="Где работа"
+      title={t('Где работа')}
       onClose={onClose}
       footer={
         <button type="button" className="btn btn--primary btn--wide" onClick={apply} disabled={failed || busy}>
-          {busy ? 'Ищем адрес…' : 'Выбрать это место'}
+          {busy ? t('Ищем адрес…') : t('Выбрать это место')}
         </button>
       }
     >
       {failed ? (
-        <div className="hint center">Карта не загрузилась. Укажите метро или адрес текстом.</div>
+        <div className="hint center">{t('Карта не загрузилась. Укажите метро или адрес текстом.')}</div>
       ) : (
         <div className="point-map">
           <div className="point-map__map" ref={box} />
@@ -77,7 +78,7 @@ export function PointPicker({ center, zoom, onClose, onApply }: Props) {
           </div>
         </div>
       )}
-      <div className="hint small center">Передвиньте карту так, чтобы булавка стояла на месте работы.</div>
+      <div className="hint small center">{t('Передвиньте карту так, чтобы булавка стояла на месте работы.')}</div>
     </Sheet>
   );
 }

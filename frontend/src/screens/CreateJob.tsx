@@ -6,6 +6,7 @@ import { MetroPicker } from '../components/MetroPicker';
 import { MetroDot } from '../components/MetroDot';
 import { PointPicker, type Point } from '../components/PointPicker';
 import { estimatePerHour, mskDay, rub } from '../format';
+import { N_, t } from '../i18n';
 import { useMainButton } from '../mainButton';
 import { backButtonSupported, haptic, mainButtonSupported } from '../telegram';
 import type { Job, JobIn, Me, Meta, PayUnit } from '../types';
@@ -131,7 +132,7 @@ function formFromJob(job: Job, mode: 'edit' | 'repeat', now = new Date()): Form 
   };
 }
 
-const TIMING_PRESETS = ['сразу', 'в конце дня', 'на следующий день'];
+const TIMING_PRESETS = [N_('сразу'), N_('в конце дня'), N_('на следующий день')];
 const MAX_WORKERS = 50;
 
 type Errors = Partial<Record<'category' | 'title' | 'pay' | 'date' | 'time' | 'duration' | 'place', string>>;
@@ -150,22 +151,22 @@ function startDay(f: Form, now = new Date()): string | null {
 function validate(f: Form): Errors {
   const e: Errors = {};
   const now = new Date();
-  if (!f.category) e.category = 'Выберите категорию';
-  if (f.title.trim().length < 3) e.title = 'Коротко напишите, что нужно сделать';
+  if (!f.category) e.category = t('Выберите категорию');
+  if (f.title.trim().length < 3) e.title = t('Коротко напишите, что нужно сделать');
   const pay = num(f.payAmount);
-  if (pay == null || pay <= 0) e.pay = 'Укажите оплату';
-  else if (pay > 1_000_000) e.pay = 'Слишком большая сумма';
+  if (pay == null || pay <= 0) e.pay = t('Укажите оплату');
+  else if (pay > 1_000_000) e.pay = t('Слишком большая сумма');
   if (f.dateMode === 'pick') {
-    if (!f.date) e.date = 'Выберите дату';
-    else if (f.date < mskDay(now)) e.date = 'Эта дата уже прошла';
+    if (!f.date) e.date = t('Выберите дату');
+    else if (f.date < mskDay(now)) e.date = t('Эта дата уже прошла');
   }
   if (f.time && startDay(f) === mskDay(now)) {
     const nowHm = new Intl.DateTimeFormat('ru-RU', { timeZone: 'Europe/Moscow', hour: '2-digit', minute: '2-digit' }).format(now);
-    if (f.time < nowHm) e.time = 'Это время сегодня уже прошло';
+    if (f.time < nowHm) e.time = t('Это время сегодня уже прошло');
   }
   const dur = num(f.duration);
-  if (f.duration.trim() && (dur == null || dur < 0.5 || dur > 24)) e.duration = 'От 0,5 до 24 часов';
-  if (!f.metroId && !f.address.trim() && !f.point) e.place = 'Укажите метро, адрес или точку на карте';
+  if (f.duration.trim() && (dur == null || dur < 0.5 || dur > 24)) e.duration = t('От 0,5 до 24 часов');
+  if (!f.metroId && !f.address.trim() && !f.point) e.place = t('Укажите метро, адрес или точку на карте');
   return e;
 }
 
@@ -206,7 +207,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
   const [form, setForm] = useState<Form>(() => (source ? formFromJob(source.job, source.mode) : freshForm(meta)));
   const [tried, setTried] = useState(false);
   const [touched, setTouched] = useState<Set<keyof Errors>>(() => new Set());
-  const touch = (k: keyof Errors) => setTouched((t) => (t.has(k) ? t : new Set(t).add(k)));
+  const touch = (k: keyof Errors) => setTouched((prev) => (prev.has(k) ? prev : new Set(prev).add(k)));
   const [busy, setBusy] = useState(false);
   const [serverError, setServerError] = useState('');
   const [metroOpen, setMetroOpen] = useState(false);
@@ -240,13 +241,13 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
       if (editing) {
         const job = await api.updateJob(editing.id, toBody(form));
         haptic('success');
-        toast(editing.responses_count ? 'Сохранено. Откликнувшимся пришлём сообщение об изменениях.' : 'Изменения сохранены');
+        toast(editing.responses_count ? t('Сохранено. Откликнувшимся пришлём сообщение об изменениях.') : t('Изменения сохранены'));
         onCreated(job);
         return;
       }
       const job = await api.createJob(toBody(form));
       haptic('success');
-      toast('Заявка опубликована. Сообщим, когда кто-то откликнется.');
+      toast(t('Заявка опубликована. Сообщим, когда кто-то откликнется.'));
       saveLast(form);
       if (!source) {
         setForm(freshForm(meta));
@@ -263,7 +264,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
     }
   };
 
-  const submitText = editing ? 'Сохранить изменения' : 'Опубликовать заявку';
+  const submitText = editing ? t('Сохранить изменения') : t('Опубликовать заявку');
   useMainButton(active && !metroOpen && !pointOpen ? { text: submitText, onClick: submit, progress: busy } : null);
 
   const cls = (k: keyof Errors) => `field${shown[k] ? ' field--error' : ''}`;
@@ -320,21 +321,21 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
         <div className="topbar">
           <button type="button" className="topbar__back" onClick={onBack}>
             <Icon name="chevron-left" size={22} />
-            Назад
+            {t('Назад')}
           </button>
           <span />
         </div>
       )}
       <header className="feed-head">
-        <h1 className="app-title">{editing ? 'Изменить заявку' : source ? 'Повторить заявку' : 'Новая заявка'}</h1>
+        <h1 className="app-title">{editing ? t('Изменить заявку') : source ? t('Повторить заявку') : t('Новая заявка')}</h1>
         <p className="hint lead">
           {editing
             ? editing.responses_count
-              ? 'Тем, кто уже откликнулся, бот пришлёт сообщение об изменениях.'
-              : 'Заявка останется в ленте с новыми условиями.'
+              ? t('Тем, кто уже откликнулся, бот пришлёт сообщение об изменениях.')
+              : t('Заявка останется в ленте с новыми условиями.')
             : source
-              ? 'Всё заполнено как в прошлый раз. Проверьте дату и время и опубликуйте.'
-              : 'Исполнители увидят её в ленте и на карте. Обычно первые отклики приходят за минуты.'}
+              ? t('Всё заполнено как в прошлый раз. Проверьте дату и время и опубликуйте.')
+              : t('Исполнители увидят её в ленте и на карте. Обычно первые отклики приходят за минуты.')}
         </p>
       </header>
 
@@ -346,10 +347,10 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
           submit();
         }}
       >
-        <Section icon="briefcase" title="Что за работа">
+        <Section icon="briefcase" title={t('Что за работа')}>
           <div className={cls('category')}>
             <div className="field__label" id={catLabelId}>
-              Категория
+              {t('Категория')}
             </div>
             <div className="chips chips--wrap" role="radiogroup" aria-labelledby={catLabelId}>
               {meta.categories.map((c) => (
@@ -373,11 +374,11 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
           </div>
 
           <label className={cls('title')}>
-            <span className="field__label">Что нужно сделать</span>
+            <span className="field__label">{t('Что нужно сделать')}</span>
             <input
               className="input"
               maxLength={80}
-              placeholder="Например: грузчики на переезд офиса"
+              placeholder={t('Например: грузчики на переезд офиса')}
               value={form.title}
               onChange={(e) => set({ title: e.target.value })}
               onBlur={() => touch('title')}
@@ -387,21 +388,21 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
           </label>
 
           <label className="field">
-            <span className="field__label">Подробности</span>
+            <span className="field__label">{t('Подробности')}</span>
             <textarea
               className="input textarea"
               rows={3}
               maxLength={1000}
-              placeholder="Что делать, что взять с собой, есть ли лифт, нужен ли паспорт"
+              placeholder={t('Что делать, что взять с собой, есть ли лифт, нужен ли паспорт')}
               value={form.description}
               onChange={(e) => set({ description: e.target.value })}
             />
           </label>
 
           <div className="field field--row">
-            <span className="field__label">Сколько человек</span>
+            <span className="field__label">{t('Сколько человек')}</span>
             <div className="stepper">
-              <button type="button" className="stepper__btn" aria-label="Меньше" disabled={form.workers <= 1} onClick={() => set({ workers: form.workers - 1 })}>
+              <button type="button" className="stepper__btn" aria-label={t('Меньше')} disabled={form.workers <= 1} onClick={() => set({ workers: form.workers - 1 })}>
                 −
               </button>
               <span className="stepper__value" aria-live="polite">
@@ -410,7 +411,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
               <button
                 type="button"
                 className="stepper__btn"
-                aria-label="Больше"
+                aria-label={t('Больше')}
                 disabled={form.workers >= MAX_WORKERS}
                 onClick={() => set({ workers: form.workers + 1 })}
               >
@@ -420,9 +421,9 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
           </div>
         </Section>
 
-        <Section icon="ruble" title="Оплата">
+        <Section icon="ruble" title={t('Оплата')}>
           <div className={cls('pay')}>
-            <span className="field__label">Сколько получит один человек</span>
+            <span className="field__label">{t('Сколько получит один человек')}</span>
             <div className="row-gap">
               <div className="input-wrap">
                 <input
@@ -433,12 +434,12 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
                   value={form.payAmount}
                   onChange={(e) => set({ payAmount: e.target.value.replace(/[^\d]/g, '') })}
                   onBlur={() => touch('pay')}
-                  aria-label="Сумма, ₽"
+                  aria-label={t('Сумма, ₽')}
                   aria-invalid={!!shown.pay}
                 />
                 <span className="input-wrap__suffix">₽</span>
               </div>
-              <select className="input select" value={form.payUnit} onChange={(e) => set({ payUnit: e.target.value as PayUnit })} aria-label="За что">
+              <select className="input select" value={form.payUnit} onChange={(e) => set({ payUnit: e.target.value as PayUnit })} aria-label={t('За что')}>
                 {meta.pay_units.map((u) => (
                   <option key={u.id} value={u.id}>
                     {u.label}
@@ -450,50 +451,51 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
             {!shown.pay && est && (
               <div className="field__hint">
                 {est.approx ? '≈ ' : ''}
-                {rub(est.value)}/ч
-                {(form.payUnit === 'shift' || form.payUnit === 'day') && !num(form.duration) ? ' (смену считаем за 8 часов)' : ''}
-                {' — так ставка выглядит в ленте'}
+                {rub(est.value)}
+                {t('/ч')}
+                {(form.payUnit === 'shift' || form.payUnit === 'day') && !num(form.duration) ? ` ${t('(смену считаем за 8 часов)')}` : ''}
+                {` ${t('— так ставка выглядит в ленте')}`}
               </div>
             )}
             {!shown.pay && pay != null && pay > 0 && form.payUnit === 'task' && !est && (
-              <div className="field__hint field__hint--muted">Укажите длительность, чтобы в ленте была ставка в час</div>
+              <div className="field__hint field__hint--muted">{t('Укажите длительность, чтобы в ленте была ставка в час')}</div>
             )}
           </div>
 
           <div className="field">
-            <span className="field__label">Когда платите</span>
+            <span className="field__label">{t('Когда платите')}</span>
             <div className="chips chips--wrap">
-              {TIMING_PRESETS.map((t) => (
+              {TIMING_PRESETS.map((p) => (
                 <button
-                  key={t}
+                  key={p}
                   type="button"
-                  className={`chip${form.payTiming === t ? ' chip--on' : ''}`}
-                  aria-pressed={form.payTiming === t}
-                  onClick={() => set({ payTiming: form.payTiming === t ? '' : t })}
+                  className={`chip${form.payTiming === p ? ' chip--on' : ''}`}
+                  aria-pressed={form.payTiming === p}
+                  onClick={() => set({ payTiming: form.payTiming === p ? '' : p })}
                 >
-                  {t}
+                  {t(p)}
                 </button>
               ))}
             </div>
             <input
               className="input"
               maxLength={60}
-              placeholder="или своими словами (необязательно)"
-              aria-label="Когда платите, своими словами"
+              placeholder={t('или своими словами (необязательно)')}
+              aria-label={t('Когда платите, своими словами')}
               value={timingCustom}
               onChange={(e) => set({ payTiming: e.target.value })}
             />
           </div>
         </Section>
 
-        <Section icon="calendar" title="Когда">
+        <Section icon="calendar" title={t('Когда')}>
           <div className={cls('date')}>
-            <div className="segmented" role="radiogroup" aria-label="День">
+            <div className="segmented" role="radiogroup" aria-label={t('День')}>
               {(
                 [
-                  ['today', 'Сегодня'],
-                  ['tomorrow', 'Завтра'],
-                  ['pick', 'Другой день'],
+                  ['today', N_('Сегодня')],
+                  ['tomorrow', N_('Завтра')],
+                  ['pick', N_('Другой день')],
                 ] as const
               ).map(([id, label]) => (
                 <button
@@ -504,7 +506,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
                   className={`segmented__item${form.dateMode === id ? ' segmented__item--on' : ''}`}
                   onClick={() => set({ dateMode: id })}
                 >
-                  {label}
+                  {t(label)}
                 </button>
               ))}
             </div>
@@ -516,7 +518,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
                 value={form.date}
                 onChange={(e) => set({ date: e.target.value })}
                 onBlur={() => touch('date')}
-                aria-label="Дата"
+                aria-label={t('Дата')}
               />
             )}
             {err('date')}
@@ -524,12 +526,12 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
 
           <div className="row-gap">
             <label className={`${cls('time')} grow`}>
-              <span className="field__label">Начало</span>
+              <span className="field__label">{t('Начало')}</span>
               <input className="input" type="time" value={form.time} onChange={(e) => set({ time: e.target.value })} onBlur={() => touch('time')} />
               {err('time')}
             </label>
             <label className={`${cls('duration')} grow`}>
-              <span className="field__label">Часов работы</span>
+              <span className="field__label">{t('Часов работы')}</span>
               <input
                 className="input"
                 inputMode="decimal"
@@ -544,7 +546,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
           </div>
         </Section>
 
-        <Section icon="pin" title="Где">
+        <Section icon="pin" title={t('Где')}>
           <div className={cls('place')}>
             <button type="button" className="input picker" onClick={() => setMetroOpen(true)} aria-haspopup="dialog">
               {station ? (
@@ -554,7 +556,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
               ) : (
                 <>
                   <Icon name="metro" size={18} className="hint" />
-                  <span className="hint">Станция метро</span>
+                  <span className="hint">{t('Станция метро')}</span>
                 </>
               )}
               <Icon name="chevron-down" size={18} className="chip__caret" />
@@ -562,8 +564,8 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
             <input
               className="input"
               maxLength={200}
-              placeholder={station ? 'Адрес (необязательно)' : 'Адрес'}
-              aria-label="Адрес"
+              placeholder={station ? t('Адрес (необязательно)') : t('Адрес')}
+              aria-label={t('Адрес')}
               value={form.address}
               onChange={(e) => set({ address: e.target.value })}
               onBlur={() => touch('place')}
@@ -573,20 +575,20 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
                 <div className="place-point">
                   <button type="button" className="btn btn--sm btn--secondary" onClick={() => setPointOpen(true)}>
                     <Icon name="check" size={16} />
-                    Точка на карте выбрана
+                    {t('Точка на карте выбрана')}
                   </button>
-                  <button type="button" className="icon-btn" onClick={() => set({ point: null })} aria-label="Убрать точку" title="Убрать точку">
+                  <button type="button" className="icon-btn" onClick={() => set({ point: null })} aria-label={t('Убрать точку')} title={t('Убрать точку')}>
                     <Icon name="x" size={18} />
                   </button>
                 </div>
               ) : (
                 <button type="button" className="btn btn--sm btn--secondary" onClick={() => setPointOpen(true)}>
                   <Icon name="pin" size={16} />
-                  Указать на карте
+                  {t('Указать на карте')}
                 </button>
               ))}
             {err('place')}
-            {!shown.place && <div className="hint small">Достаточно метро или адреса. Точный адрес можно сообщить исполнителю в чате.</div>}
+            {!shown.place && <div className="hint small">{t('Достаточно метро или адреса. Точный адрес можно сообщить исполнителю в чате.')}</div>}
           </div>
         </Section>
 
@@ -594,7 +596,7 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
           <section className="form-section form-section--preview">
             <h2 className="form-section__title">
               <Icon name="eye" size={18} />
-              Так заявку увидят в ленте
+              {t('Так заявку увидят в ленте')}
             </h2>
             <JobCard job={preview} category={meta.categories.find((c) => c.id === preview.category)} preview />
           </section>
@@ -607,19 +609,19 @@ export function CreateJob({ meta, me, active, onCreated, toast, source, onBack }
         )}
         {tried && Object.keys(errors).length > 0 && (
           <div className="form-error" role="alert">
-            Проверьте поля, отмеченные красным.
+            {t('Проверьте поля, отмеченные красным.')}
           </div>
         )}
 
         {!mainButtonSupported && (
           <button type="submit" className="btn btn--primary btn--wide btn--lg" disabled={busy}>
             <Icon name={editing ? 'check' : 'send'} size={20} />
-            {busy ? (editing ? 'Сохраняем…' : 'Публикуем…') : submitText}
+            {busy ? (editing ? t('Сохраняем…') : t('Публикуем…')) : submitText}
           </button>
         )}
         <div className="hint small center form-foot">
           <Icon name="shield" size={16} />
-          Заявки с предоплатой и «оформлением» не публикуем.
+          {t('Заявки с предоплатой и «оформлением» не публикуем.')}
         </div>
       </form>
 

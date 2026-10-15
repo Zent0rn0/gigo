@@ -4,6 +4,7 @@ import { Icon, categoryIcon } from '../components/Icon';
 import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { Avatar, RatingText, SkillChips } from '../components/ui';
 import { plural } from '../format';
+import { t } from '../i18n';
 import { haptic } from '../telegram';
 import type { Meta, WorkerCard } from '../types';
 
@@ -30,8 +31,8 @@ export function Workers({ meta, active, onOpenUser }: Props) {
   const ctrl = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    const t = window.setTimeout(() => setQ(search.trim()), 350);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => setQ(search.trim()), 350);
+    return () => window.clearTimeout(timer);
   }, [search]);
 
   useEffect(() => {
@@ -83,8 +84,8 @@ export function Workers({ meta, active, onOpenUser }: Props) {
   return (
     <div className="screen">
       <header className="feed-head">
-        <h1 className="app-title">Исполнители</h1>
-        <p className="hint lead">Откройте профиль и пригласите на свою заявку: бот пришлёт человеку ссылку на неё.</p>
+        <h1 className="app-title">{t('Исполнители')}</h1>
+        <p className="hint lead">{t('Откройте профиль и пригласите на свою заявку: бот пришлёт человеку ссылку на неё.')}</p>
       </header>
 
       <div className="feed-sticky">
@@ -95,21 +96,21 @@ export function Workers({ meta, active, onOpenUser }: Props) {
             type="search"
             enterKeyHint="search"
             maxLength={100}
-            placeholder="Имя или опыт: права, свой инструмент…"
-            aria-label="Поиск исполнителей"
+            placeholder={t('Имя или опыт: права, свой инструмент…')}
+            aria-label={t('Поиск исполнителей')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
           {search && (
-            <button type="button" className="feed-search__clear" onClick={() => setSearch('')} aria-label="Очистить поиск" title="Очистить поиск">
+            <button type="button" className="feed-search__clear" onClick={() => setSearch('')} aria-label={t('Очистить поиск')} title={t('Очистить поиск')}>
               <Icon name="x" size={16} />
             </button>
           )}
         </div>
         <div className="filters">
-          <div className="chips chips--scroll" role="radiogroup" aria-label="Навык">
+          <div className="chips chips--scroll" role="radiogroup" aria-label={t('Навык')}>
             <button type="button" role="radio" aria-checked={!category} className={`chip${!category ? ' chip--on' : ''}`} onClick={() => pick(null)}>
-              Все
+              {t('Все')}
             </button>
             {meta.categories.map((c) => (
               <button
@@ -130,7 +131,7 @@ export function Workers({ meta, active, onOpenUser }: Props) {
 
       <div className="results-bar">
         <span className="hint" aria-live="polite">
-          {status === 'ready' ? `${total} ${plural(total, ['исполнитель', 'исполнителя', 'исполнителей'])}` : 'Загружаем…'}
+          {status === 'ready' ? `${total} ${plural(total, ['исполнитель', 'исполнителя', 'исполнителей'])}` : t('Загружаем…')}
         </span>
       </div>
 
@@ -143,11 +144,11 @@ export function Workers({ meta, active, onOpenUser }: Props) {
       {status === 'ready' && items.length === 0 && (
         <EmptyState
           icon="users"
-          title={category || q ? 'Никого не нашли' : 'Каталог пока пуст'}
+          title={category || q ? t('Никого не нашли') : t('Каталог пока пуст')}
           text={
             category || q
-              ? 'Попробуйте другой навык или слово. Или создайте заявку: исполнители сами откликнутся.'
-              : 'Здесь появятся исполнители, которые заполнили профиль. А пока создайте заявку: исполнители откликнутся сами.'
+              ? t('Попробуйте другой навык или слово. Или создайте заявку: исполнители сами откликнутся.')
+              : t('Здесь появятся исполнители, которые заполнили профиль. А пока создайте заявку: исполнители откликнутся сами.')
           }
         />
       )}
@@ -161,7 +162,7 @@ export function Workers({ meta, active, onOpenUser }: Props) {
                   <span className="user-row__name">{w.first_name}</span>
                   <span className="hint small">
                     <RatingText rating={w.rating} count={w.reviews_count} />
-                    {w.jobs_count ? ` · ${w.jobs_count} ${plural(w.jobs_count, ['работа', 'работы', 'работ'])} в Gigo` : ''}
+                    {w.jobs_count ? ` · ${t('{n} {jobs} в Gigo', { n: w.jobs_count, jobs: plural(w.jobs_count, ['работа', 'работы', 'работ']) })}` : ''}
                   </span>
                 </span>
                 <Icon name="chevron-right" size={20} className="user-row__chev" />
@@ -176,7 +177,7 @@ export function Workers({ meta, active, onOpenUser }: Props) {
                 <Spinner />
               ) : (
                 <button type="button" className="btn btn--secondary btn--wide" onClick={loadMore}>
-                  {moreError ? 'Не загрузилось. Ещё раз' : 'Показать ещё'}
+                  {moreError ? t('Не загрузилось. Ещё раз') : t('Показать ещё')}
                 </button>
               )}
             </div>

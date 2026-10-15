@@ -8,6 +8,7 @@ import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { IconButton } from '../components/ui';
 import { filtersToQuery, isEmptyFilter, subscriptionBody, EMPTY_FILTERS, type Filters } from '../filters';
 import { plural } from '../format';
+import { t } from '../i18n';
 import { usePullToRefresh } from '../pullToRefresh';
 import { haptic } from '../telegram';
 import type { GeoPoint, Job, Meta } from '../types';
@@ -50,8 +51,8 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   useEffect(() => {
-    const t = window.setTimeout(() => setQ(search.trim()), 350);
-    return () => window.clearTimeout(t);
+    const timer = window.setTimeout(() => setQ(search.trim()), 350);
+    return () => window.clearTimeout(timer);
   }, [search]);
   const clearSearch = () => {
     setSearch('');
@@ -141,11 +142,11 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
     try {
       await api.createSubscription(subscriptionBody(filters, meta, location));
       haptic('success');
-      toast('Готово! Новые такие заявки пришлёт бот. Подписки — в профиле.');
+      toast(t('Готово! Новые такие заявки пришлёт бот. Подписки — в профиле.'));
       setSubscribedKeys((s) => new Set(s).add(filterKey));
     } catch (e) {
       haptic('error');
-      toast(e instanceof ApiError && e.status === 409 ? 'Не больше 10 подписок. Удалите ненужную: Профиль → Подписки.' : errorText(e));
+      toast(e instanceof ApiError && e.status === 409 ? t('Не больше 10 подписок. Удалите ненужную: Профиль → Подписки.') : errorText(e));
     } finally {
       setSubscribing(false);
     }
@@ -163,10 +164,10 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
         <div className="brand-title">
           <LogoMark size={30} />
           <h1 className="app-title">
-            Подработка <span className="app-title__city">{meta.city.name}</span>
+            {t('Подработка')} <span className="app-title__city">{meta.city.name}</span>
           </h1>
         </div>
-        <IconButton icon="refresh" label="Обновить" onClick={refresh} disabled={status === 'loading' || refreshing} spin={refreshing} />
+        <IconButton icon="refresh" label={t('Обновить')} onClick={refresh} disabled={status === 'loading' || refreshing} spin={refreshing} />
       </header>
 
       <div className="feed-sticky">
@@ -177,8 +178,8 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
             type="search"
             enterKeyHint="search"
             maxLength={100}
-            placeholder="Поиск: склад, курьер, Таганская…"
-            aria-label="Поиск заявок"
+            placeholder={t('Поиск: склад, курьер, Таганская…')}
+            aria-label={t('Поиск заявок')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             onKeyDown={(e) => {
@@ -189,7 +190,7 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
             }}
           />
           {search && (
-            <button type="button" className="feed-search__clear" onClick={clearSearch} aria-label="Очистить поиск" title="Очистить поиск">
+            <button type="button" className="feed-search__clear" onClick={clearSearch} aria-label={t('Очистить поиск')} title={t('Очистить поиск')}>
               <Icon name="x" size={16} />
             </button>
           )}
@@ -212,20 +213,20 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
       <div className="results-bar">
         <span className="hint" aria-live="polite">
           {status === 'ready'
-            ? `${total} ${plural(total, ['заявка', 'заявки', 'заявок'])}${filters.nearMe && location ? ' · ближе сверху' : ''}`
+            ? `${total} ${plural(total, ['заявка', 'заявки', 'заявок'])}${filters.nearMe && location ? ` · ${t('ближе сверху')}` : ''}`
             : waitingLocation
-              ? 'Ищем вас на карте…'
-              : 'Загружаем…'}
+              ? t('Ищем вас на карте…')
+              : t('Загружаем…')}
         </span>
         {q ? null : alreadySubscribed ? (
           <span className="sub-done">
             <Icon name="bell-check" size={16} />
-            Вы подписаны
+            {t('Вы подписаны')}
           </span>
         ) : (
           <button type="button" className="sub-btn" onClick={subscribe} disabled={subscribing}>
             <Icon name="bell" size={16} />
-            {subscribing ? 'Подписываем…' : isEmptyFilter(filters) ? 'Уведомлять о новых' : 'Уведомлять о таких'}
+            {subscribing ? t('Подписываем…') : isEmptyFilter(filters) ? t('Уведомлять о новых') : t('Уведомлять о таких')}
           </button>
         )}
       </div>
@@ -234,7 +235,7 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
         <div className="skills-hint">
           <button type="button" className="chip chip--ghost" onClick={() => onFiltersChange({ ...filters, categories: skills })}>
             <Icon name="zap" size={16} />
-            Только мои навыки
+            {t('Только мои навыки')}
           </button>
           <span className="hint small">{skillLabels}</span>
         </div>
@@ -254,12 +255,12 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
       {status === 'ready' && items.length === 0 && q && (
         <EmptyState
           icon="search"
-          title={`Ничего не нашли по «${q}»`}
-          text={isEmptyFilter(filters) ? 'Попробуйте другое слово: название работы, метро или район.' : 'Попробуйте другое слово или сбросьте фильтр.'}
+          title={t('Ничего не нашли по «{q}»', { q })}
+          text={isEmptyFilter(filters) ? t('Попробуйте другое слово: название работы, метро или район.') : t('Попробуйте другое слово или сбросьте фильтр.')}
           action={
             <button type="button" className="btn btn--secondary" onClick={clearSearch}>
               <Icon name="x" size={18} />
-              Очистить поиск
+              {t('Очистить поиск')}
             </button>
           }
         />
@@ -268,22 +269,22 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
       {status === 'ready' && items.length === 0 && !q && (
         <EmptyState
           icon="search"
-          title={isEmptyFilter(filters) ? 'Пока заявок нет' : 'Под фильтр ничего нет'}
+          title={isEmptyFilter(filters) ? t('Пока заявок нет') : t('Под фильтр ничего нет')}
           text={
             isEmptyFilter(filters)
-              ? 'Загляните чуть позже или включите уведомления — бот пришлёт новые заявки.'
-              : 'Попробуйте смягчить фильтр или включите уведомления: бот пришлёт, когда появится подходящая заявка.'
+              ? t('Загляните чуть позже или включите уведомления — бот пришлёт новые заявки.')
+              : t('Попробуйте смягчить фильтр или включите уведомления: бот пришлёт, когда появится подходящая заявка.')
           }
           action={
             !isEmptyFilter(filters) ? (
               <button type="button" className="btn btn--secondary" onClick={() => onFiltersChange(EMPTY_FILTERS)}>
                 <Icon name="x" size={18} />
-                Сбросить фильтр
+                {t('Сбросить фильтр')}
               </button>
             ) : (
               <button type="button" className="btn btn--secondary" onClick={refresh}>
                 <Icon name="refresh" size={18} />
-                Обновить
+                {t('Обновить')}
               </button>
             )
           }
@@ -302,12 +303,12 @@ export function Feed({ meta, active, filters, location, locating, patches, onFil
                 <Spinner />
               ) : (
                 <button type="button" className="btn btn--secondary btn--wide" onClick={loadMore}>
-                  {moreError ? 'Не загрузилось. Ещё раз' : 'Показать ещё'}
+                  {moreError ? t('Не загрузилось. Ещё раз') : t('Показать ещё')}
                 </button>
               )}
             </div>
           )}
-          {items.length >= total && total > 3 && <div className="hint center pad small">Это все заявки. Потяните вниз, чтобы обновить.</div>}
+          {items.length >= total && total > 3 && <div className="hint center pad small">{t('Это все заявки. Потяните вниз, чтобы обновить.')}</div>}
         </div>
       )}
     </div>

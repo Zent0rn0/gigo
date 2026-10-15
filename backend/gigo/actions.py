@@ -6,8 +6,9 @@
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 
-from gigo import events, rules
+from gigo import events, i18n, rules
 from gigo.categories import CATEGORIES, PAY_UNITS, SCAM_FLAGS
+from gigo.i18n import N_, tr
 
 REPORTS_TO_HIDE = 3
 MAX_OPEN_JOBS = 20
@@ -16,6 +17,9 @@ MAX_DAYS_AHEAD = 60
 
 class ActionError(Exception):
     def __init__(self, status: int, detail: str):
+        # detail — русский ключ (N_) или уже переведённый tr(): переводим на текущий язык (API — X-Lang,
+        # бот — язык пользователя), чтобы и бот, и API показывали текст на языке человека
+        detail = i18n.translate(detail)
         super().__init__(detail)
         self.status = status
         self.detail = detail
@@ -37,28 +41,28 @@ async def set_response_status(conn, response_id: int, actor_id: int, status: str
     r = await conn.fetchrow("SELECT * FROM responses WHERE id = $1 FOR UPDATE", response_id)
     job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", r["job_id"]) if r else None
     if not r or actor_id not in (r["worker_id"], job["employer_id"]):
-        raise ActionError(404, "Отклик не найден")
+        raise ActionError(404, N_("Отклик не найден"))
     if status == r["status"]:
         return
     if status == "withdrawn":
         if actor_id != r["worker_id"] or r["status"] not in ("pending", "accepted"):
-            raise ActionError(409, "Этот отклик нельзя отозвать")
+            raise ActionError(409, N_("Этот отклик нельзя отозвать"))
         if r["status"] == "accepted":
             await events.withdrawn(conn, job, (await _users(conn, actor_id))[actor_id])
     elif status in ("accepted", "rejected"):
         if actor_id != job["employer_id"]:
-            raise ActionError(403, "Решение по отклику принимает заказчик")
+            raise ActionError(403, N_("Решение по отклику принимает заказчик"))
         if r["status"] == "withdrawn":
-            raise ActionError(409, "Исполнитель отозвал отклик")
+            raise ActionError(409, N_("Исполнитель отозвал отклик"))
         if status == "accepted" and job["status"] != "open":
-            raise ActionError(409, "Заявка закрыта. Откройте её снова, чтобы принять отклик.")
+            raise ActionError(409, N_("Заявка закрыта. Откройте её снова, чтобы принять отклик."))
         users = await _users(conn, r["worker_id"], job["employer_id"])
         if status == "accepted":
             await events.accepted(conn, job, users[r["worker_id"]], users[job["employer_id"]])
         else:
             await events.rejected(conn, job, r["worker_id"])
     else:
-        raise ActionError(422, "Неизвестный статус")
+        raise ActionError(422, N_("Неизвестный статус"))
     await conn.execute("UPDATE responses SET status = $2, updated_at = now() WHERE id = $1", response_id, status)
 
 
@@ -94,35 +98,35 @@ LOCATION_SQL = ("CASE WHEN ${lat}::float8 IS NULL THEN NULL "
 async def job_fields(conn, geocoder, body: NewJob, created: datetime | None = None) -> dict:
     """Проверенные поля заявки для INSERT/UPDATE. created: когда создана (для срока жизни при правке)."""
     if body.category not in CATEGORIES:
-        raise ActionError(422, "Неизвестная категория")
+        raise ActionError(422, N_("Неизвестная категория"))
     if body.pay_unit not in PAY_UNITS:
-        raise ActionError(422, "Неизвестная единица оплаты")
+        raise ActionError(422, N_("Неизвестная единица оплаты"))
     title, description, address = rules.clean(body.title), rules.clean(body.description), rules.clean(body.address)
     if not title:
-        raise ActionError(422, "Напишите, что нужно сделать")
+        raise ActionError(422, N_("Напишите, что нужно сделать"))
     if flags := rules.scam_flags(f"{title}\n{description or ''}"):
-        raise ActionError(422, f"Заявку нельзя опубликовать: {SCAM_FLAGS[flags[0]]}. "
-                               "Если это ошибка, переформулируйте текст.")
+        raise ActionError(422, tr("Заявку нельзя опубликовать: {reason}. Если это ошибка, переформулируйте текст.",
+                                  reason=tr(SCAM_FLAGS[flags[0]])))
     has_point = body.lat is not None and body.lng is not None
     if not (body.metro_id or address or has_point):
-        raise ActionError(422, "Укажите метро или адрес")
+        raise ActionError(422, N_("Укажите метро или адрес"))
 
     now = datetime.now(rules.MSK)
     day, at = body.starts_on, body.start_time
     if at and not day:
         day = now.date()
     if day and not (now.date() <= day <= now.date() + timedelta(days=MAX_DAYS_AHEAD)):
-        raise ActionError(422, f"Дата должна быть от сегодня до {MAX_DAYS_AHEAD} дней вперёд")
+        raise ActionError(422, tr("Дата должна быть от сегодня до {n} дней вперёд", n=MAX_DAYS_AHEAD))
     start = rules.starts_at(day, at)
     if start and start < now - timedelta(minutes=30):
-        raise ActionError(422, "Время начала уже прошло")
+        raise ActionError(422, N_("Время начала уже прошло"))
 
     metro = None
     if body.metro_id:
         metro = await conn.fetchrow("SELECT ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng "
                                     "FROM metro_stations WHERE id = $1", body.metro_id)
         if not metro:
-            raise ActionError(422, "Неизвестная станция метро")
+            raise ActionError(422, N_("Неизвестная станция метро"))
     point = (body.lat, body.lng) if has_point else None
     if not point and address and geocoder:
         point = await geocoder.locate(address)
@@ -146,10 +150,10 @@ async def create_job(conn, geocoder, employer_id: int, body: NewJob) -> int:
     """Проверяет лимиты и поля и сохраняет заявку. Возвращает её id."""
     if await conn.fetchval("SELECT count(*) FROM jobs WHERE employer_id = $1 AND status = 'open' "
                            "AND expires_at > now()", employer_id) >= MAX_OPEN_JOBS:
-        raise ActionError(409, f"Открыто уже {MAX_OPEN_JOBS} заявок. Закройте ненужные, чтобы создать новую.")
+        raise ActionError(409, tr("Открыто уже {n} заявок. Закройте ненужные, чтобы создать новую.", n=MAX_OPEN_JOBS))
     await check_recent(conn, "SELECT count(*) FROM jobs WHERE employer_id = $1 "
                              "AND created_at > now() - interval '1 hour'",
-                       employer_id, 5, "Не больше 5 заявок в час. Попробуйте позже.")
+                       employer_id, 5, N_("Не больше 5 заявок в час. Попробуйте позже."))
     fields = await job_fields(conn, geocoder, body)
     n = len(JOB_COLUMNS)
     location = LOCATION_SQL.format(lat=n + 2, lng=n + 3)
@@ -165,9 +169,9 @@ async def repeat_job(conn, job_id: int, employer_id: int, day: date) -> int:
     job = await conn.fetchrow("SELECT *, ST_Y(location::geometry) AS lat, ST_X(location::geometry) AS lng "
                               "FROM jobs WHERE id = $1", job_id)
     if not job or job["employer_id"] != employer_id:
-        raise ActionError(404, "Заявка не найдена")
+        raise ActionError(404, N_("Заявка не найдена"))
     if job["hidden_at"]:
-        raise ActionError(409, "Заявку скрыл модератор, повторить её нельзя.")
+        raise ActionError(409, N_("Заявку скрыл модератор, повторить её нельзя."))
     at = job["starts_at"].astimezone(rules.MSK).time() if job["starts_at"] else None
     return await create_job(conn, None, employer_id, NewJob(
         category=job["category"], title=job["title"], description=job["description"],
@@ -183,14 +187,14 @@ async def respond(conn, job_id: int, worker_id: int, message: str | None) -> int
     message = rules.clean(message)
     job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
     if not job:
-        raise ActionError(404, "Заявка не найдена")
+        raise ActionError(404, N_("Заявка не найдена"))
     if job["employer_id"] == worker_id:
-        raise ActionError(409, "Это ваша заявка")
+        raise ActionError(409, N_("Это ваша заявка"))
     if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc) or job["hidden_at"]:
-        raise ActionError(409, "Набор на эту заявку закрыт")
+        raise ActionError(409, N_("Набор на эту заявку закрыт"))
     await check_recent(conn, "SELECT count(*) FROM responses WHERE worker_id = $1 "
                              "AND updated_at > now() - interval '1 hour'",
-                       worker_id, 30, "Слишком много откликов за час. Попробуйте позже.")
+                       worker_id, 30, N_("Слишком много откликов за час. Попробуйте позже."))
     resp_id = await conn.fetchval(
         """INSERT INTO responses (job_id, worker_id, message) VALUES ($1, $2, $3)
            ON CONFLICT (job_id, worker_id) DO UPDATE
@@ -200,7 +204,7 @@ async def respond(conn, job_id: int, worker_id: int, message: str | None) -> int
         job_id, worker_id, message,
     )
     if not resp_id:
-        raise ActionError(409, "Вы уже откликнулись")
+        raise ActionError(409, N_("Вы уже откликнулись"))
     worker = await conn.fetchrow("SELECT tg_id, first_name, username FROM users WHERE tg_id = $1", worker_id)
     await events.new_response(conn, job, worker, message, resp_id)
     return resp_id
@@ -216,11 +220,11 @@ async def save_review(conn, response_id: int, author_id: int, rating: int, text:
         "SELECT r.job_id, r.worker_id, r.status, j.employer_id FROM responses r JOIN jobs j ON j.id = r.job_id "
         "WHERE r.id = $1", response_id)
     if not r or author_id not in (r["worker_id"], r["employer_id"]):
-        raise ActionError(404, "Отклик не найден")
+        raise ActionError(404, N_("Отклик не найден"))
     if r["status"] != "accepted":
-        raise ActionError(409, "Отзыв можно оставить только после того, как отклик принят")
+        raise ActionError(409, N_("Отзыв можно оставить только после того, как отклик принят"))
     if not 1 <= rating <= 5:
-        raise ActionError(422, "Оценка от 1 до 5")
+        raise ActionError(422, N_("Оценка от 1 до 5"))
     target = r["worker_id"] if author_id == r["employer_id"] else r["employer_id"]
     text = rules.clean(text)
     await conn.execute(
@@ -236,20 +240,20 @@ async def save_review(conn, response_id: int, author_id: int, rating: int, text:
 async def set_job_status(conn, job_id: int, actor_id: int, status: str) -> None:
     job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1 FOR UPDATE", job_id)
     if not job or job["employer_id"] != actor_id:
-        raise ActionError(404, "Заявка не найдена")
+        raise ActionError(404, N_("Заявка не найдена"))
     if status == job["status"]:
         return
     if status == "open":
         if job["expires_at"] <= datetime.now(timezone.utc):
-            raise ActionError(409, "Срок заявки прошёл. Создайте новую.")
+            raise ActionError(409, N_("Срок заявки прошёл. Создайте новую."))
         if job["hidden_at"]:
-            raise ActionError(409, "Заявку скрыл модератор, открыть её снова нельзя.")
+            raise ActionError(409, N_("Заявку скрыл модератор, открыть её снова нельзя."))
     await conn.execute("UPDATE jobs SET status = $2, updated_at = now() WHERE id = $1", job_id, status)
     if status in ("closed", "cancelled"):
         await close_pending(conn, job, cancelled=status == "cancelled")
 
 
-async def close_pending(conn, job, cancelled: bool, reason: str = "Набор закрыт") -> None:
+async def close_pending(conn, job, cancelled: bool, reason: str = N_("Набор закрыт")) -> None:
     """Ожидающим отклонение; при отмене ещё и принятым сообщаем, что работы не будет."""
     pending = await conn.fetch(
         "UPDATE responses SET status = 'rejected', updated_at = now() "
@@ -269,9 +273,9 @@ async def report_job(conn, job_id: int, author_id: int, reason: str, text: str |
                      admin_ids: tuple[int, ...]) -> None:
     job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
     if not job:
-        raise ActionError(404, "Заявка не найдена")
+        raise ActionError(404, N_("Заявка не найдена"))
     if job["employer_id"] == author_id:
-        raise ActionError(409, "Это ваша заявка")
+        raise ActionError(409, N_("Это ваша заявка"))
     await conn.execute(
         """INSERT INTO reports (job_id, author_id, reason, text) VALUES ($1, $2, $3, $4)
            ON CONFLICT (job_id, author_id) DO UPDATE
@@ -294,7 +298,7 @@ async def report_job(conn, job_id: int, author_id: int, reason: str, text: str |
 async def hide_job(conn, job_id: int, reason: str = "модератор") -> None:
     job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1 FOR UPDATE", job_id)
     if not job:
-        raise ActionError(404, "Заявка не найдена")
+        raise ActionError(404, N_("Заявка не найдена"))
     await conn.execute("UPDATE jobs SET hidden_at = coalesce(hidden_at, now()), hidden_reason = $2, "
                        "status = CASE WHEN status = 'open' THEN 'cancelled' ELSE status END WHERE id = $1",
                        job_id, reason)
@@ -314,7 +318,7 @@ async def ban_user(conn, user_id: int, reason: str = "нарушение пра�
     """Блокирует и скрывает все открытые заявки. Возвращает, сколько заявок скрыто."""
     if not await conn.fetchval("UPDATE users SET banned_at = now(), ban_reason = $2 WHERE tg_id = $1 RETURNING 1",
                                user_id, reason):
-        raise ActionError(404, "Пользователь не найден")
+        raise ActionError(404, N_("Пользователь не найден"))
     jobs = await conn.fetch("SELECT id FROM jobs WHERE employer_id = $1 AND status = 'open'", user_id)
     for j in jobs:
         await hide_job(conn, j["id"], "автор заблокирован")

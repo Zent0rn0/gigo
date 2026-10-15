@@ -7,28 +7,37 @@ from aiogram import Dispatcher, F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import BotCommand, CallbackQuery, Message
+from aiogram.types import BotCommand, BotCommandScopeChat, CallbackQuery, Message
 
-from gigo import actions, config
+from gigo import actions, config, i18n
 from gigo.bot import browse, create, look, manage, safety
-from gigo.bot.common import MENU, Kb, UserMiddleware, btn, note
+from gigo.bot.common import Kb, UserMiddleware, btn, menu, note, replace
 from gigo.bot.loops import app_button, keyboard
+from gigo.i18n import N_, tr
 
 log = logging.getLogger("gigo.bot")
 
+# Описания — русские ключи: список команд собирается на нужном языке через commands().
 COMMANDS = [
-    BotCommand(command="start", description="Меню"),
-    BotCommand(command="jobs", description="Найти работу"),
-    BotCommand(command="new", description="Создать заявку"),
-    BotCommand(command="my", description="Мои заявки и отклики на них"),
-    BotCommand(command="responses", description="Мои отклики"),
-    BotCommand(command="subs", description="Подписки на новые заявки"),
-    BotCommand(command="stop", description="Выключить рассылку новых заявок"),
-    BotCommand(command="cancel", description="Прервать текущее действие"),
-    BotCommand(command="help", description="Как это работает"),
+    ("start", N_("Меню")),
+    ("jobs", N_("Найти работу")),
+    ("new", N_("Создать заявку")),
+    ("my", N_("Мои заявки и отклики на них")),
+    ("responses", N_("Мои отклики")),
+    ("subs", N_("Подписки на новые заявки")),
+    ("stop", N_("Выключить рассылку новых заявок")),
+    ("cancel", N_("Прервать текущее действие")),
+    ("lang", N_("Язык / Language")),
+    ("help", N_("Как это работает")),
 ]
 
-HELP = (
+
+def commands() -> list[BotCommand]:
+    """Меню команд на текущем языке."""
+    return [BotCommand(command=c, description=tr(d)) for c, d in COMMANDS]
+
+# Русские ключи: показывать через tr(HELP), tr(WELCOME).
+HELP = N_(
     "💜 <b>Gigo: подработка в Москве без посредников</b>\n\n"
     "👷 <b>Ищете людей?</b>\n"
     "<blockquote>/new · заявка за минуту прямо здесь\n"
@@ -42,10 +51,11 @@ HELP = (
     "🛡 <b>Безопасность</b>\n"
     "<blockquote>Не платите за «оформление», форму или обучение и не передавайте данные карт и коды из СМС. "
     "Подозрительную заявку отправьте модератору кнопкой «Пожаловаться» в приложении.</blockquote>\n\n"
-    "<i>Всё то же самое есть в приложении: кнопка «Gigo» слева от поля ввода.</i>"
+    "<i>Всё то же самое есть в приложении: кнопка «Gigo» слева от поля ввода.</i>\n"
+    "🌐 Язык / Language: /lang"
 )
 
-WELCOME = (
+WELCOME = N_(
     "💜 <b>Привет! Это Gigo</b>\n"
     "<i>Подработка в Москве без посредников</i>\n\n"
     "📝 Заказчики публикуют заявки\n"
@@ -83,15 +93,15 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
             if payload.startswith("job_"):
                 await send_card(message, message.from_user.id, int(payload[4:]))
             else:
-                await message.answer("Открываю 👇", reply_markup=open_app("Открыть", f"?tab={payload[4:]}"))
+                await message.answer(tr("Открываю 👇"), reply_markup=open_app(tr("Открыть"), f"?tab={payload[4:]}"))
             return
         if role is None:
-            await message.answer("👋", reply_markup=MENU)
-            await look.show(message, WELCOME, kb([btn("🔎 Ищу подработку", "role:worker", "primary")],
-                                                 [btn("👷 Ищу исполнителей", "role:employer", "primary")]),
+            await message.answer("👋", reply_markup=menu())
+            await look.show(message, tr(WELCOME), kb([btn(tr("🔎 Ищу подработку"), "role:worker", "primary")],
+                                                     [btn(tr("👷 Ищу исполнителей"), "role:employer", "primary")]),
                             banner="welcome")
             return
-        await look.show(message, "💜 <b>С возвращением в Gigo!</b>\n\nМеню внизу 👇 Подробнее: /help", MENU,
+        await look.show(message, tr("💜 <b>С возвращением в Gigo!</b>\n\nМеню внизу 👇 Подробнее: /help"), menu(),
                         banner="welcome")
 
     @main.callback_query(F.data.regexp(r"^role:(worker|employer)$"))
@@ -100,25 +110,47 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
         await pool.execute("UPDATE users SET role = $2 WHERE tg_id = $1", call.from_user.id, role)
         await call.answer()
         if role == "worker":
-            await note(call, "Ищу подработку", kb([btn("🔎 Смотреть заявки", "feed:*:0")],
-                                                  [btn("🔔 Подписаться на новые", "sub:new")]))
+            await note(call, tr("Ищу подработку"), kb([btn(tr("🔎 Смотреть заявки"), "feed:*:0")],
+                                                      [btn(tr("🔔 Подписаться на новые"), "sub:new")]))
         else:
-            await note(call, "Ищу исполнителей", kb([btn("➕ Создать первую заявку", "nj:start")]))
+            await note(call, tr("Ищу исполнителей"), kb([btn(tr("➕ Создать первую заявку"), "nj:start")]))
 
     @main.message(Command("help"))
     async def help_(message: Message) -> None:
-        await look.show(message, HELP, MENU, banner="help")
+        await look.show(message, tr(HELP), menu(), banner="help")
 
     @main.message(Command("menu"))
-    async def menu(message: Message, state: FSMContext) -> None:
+    async def menu_cmd(message: Message, state: FSMContext) -> None:
         await state.clear()
-        await message.answer("Меню внизу 👇", reply_markup=MENU)
+        await message.answer(tr("Меню внизу 👇"), reply_markup=menu())
+
+    @main.message(Command("lang"))
+    async def lang_cmd(message: Message) -> None:
+        items = [btn(f"{i18n.FLAGS.get(code, '🌐')} {name}", f"lang:{code}") for code, name in i18n.LANGUAGES.items()]
+        await message.answer("🌐 " + tr("Выберите язык"), reply_markup=kb(*[items[i:i + 2]
+                                                                           for i in range(0, len(items), 2)]))
+
+    @main.callback_query(F.data.startswith("lang:"))
+    async def set_lang(call: CallbackQuery) -> None:
+        code = call.data[5:]
+        if code not in i18n.LANGUAGES:
+            await call.answer(tr("Эта кнопка устарела. Начните заново из меню."), show_alert=True)
+            return
+        await pool.execute("UPDATE users SET lang = $2 WHERE tg_id = $1", call.from_user.id, code)
+        i18n.set_lang(code)
+        await call.answer()
+        await replace(call, "✅ " + tr("Язык: {lang}", lang=f"{i18n.FLAGS.get(code, '🌐')} {i18n.LANGUAGES[code]}"))
+        await call.message.answer(tr("Меню внизу 👇"), reply_markup=menu())
+        try:  # команды в меню Telegram — тоже на выбранном языке, только для этого человека
+            await call.bot.set_my_commands(commands(), scope=BotCommandScopeChat(chat_id=call.from_user.id))
+        except Exception as e:
+            log.info("не удалось обновить команды для %s: %r", call.from_user.id, e)
 
     @main.message(Command("cancel"))
     async def cancel_cmd(message: Message, state: FSMContext) -> None:
         had = await state.get_state()
         await state.clear()
-        await message.answer("Отменил." if had else "Нечего отменять.", reply_markup=MENU)
+        await message.answer(tr("Отменил.") if had else tr("Нечего отменять."), reply_markup=menu())
 
     @main.callback_query(F.data == "cancel")
     async def cancel_btn(call: CallbackQuery, state: FSMContext) -> None:
@@ -127,7 +159,7 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
             await call.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-        await call.answer("Готово")
+        await call.answer(tr("Готово"))
 
     # --- кнопки под сообщениями -------------------------------------------------
 
@@ -163,26 +195,26 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
         except actions.ActionError as e:
             await call.answer(e.detail, show_alert=True)
             return
-        await finish(call, "✅ Принят. Контакт исполнителя пришёл отдельным сообщением." if status == "accepted"
-                     else "✖️ Отклонён")
+        await finish(call, tr("✅ Принят. Контакт исполнителя пришёл отдельным сообщением.") if status == "accepted"
+                     else tr("✖️ Отклонён"))
 
     @main.callback_query(F.data.regexp(r"^(hide|ok|ban):\d+$"))
     async def moderate(call: CallbackQuery) -> None:
         if call.from_user.id not in admins:
-            await call.answer("Только для модераторов", show_alert=True)
+            await call.answer(tr("Только для модераторов"), show_alert=True)
             return
         kind, target = call.data.split(":")
         try:
             async with pool.acquire() as conn, conn.transaction():
                 if kind == "hide":
                     await actions.hide_job(conn, int(target))
-                    note = "🚫 Заявка скрыта"
+                    note = tr("🚫 Заявка скрыта")
                 elif kind == "ok":
                     await actions.dismiss_reports(conn, int(target))
-                    note = "👌 Жалобы отклонены"
+                    note = tr("👌 Жалобы отклонены")
                 else:
                     n = await actions.ban_user(conn, int(target))
-                    note = f"⛔ Автор заблокирован, скрыто заявок: {n}"
+                    note = tr("⛔ Автор заблокирован, скрыто заявок: {n}", n=n)
         except actions.ActionError as e:
             await call.answer(e.detail, show_alert=True)
             return
@@ -202,36 +234,36 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
                           (SELECT count(*) FROM jobs WHERE created_at > now() - interval '1 day') AS jobs_day,
                           (SELECT count(*) FROM responses WHERE created_at > now() - interval '1 day') AS resp_day,
                           (SELECT count(*) FROM reports WHERE resolved_at IS NULL) AS reports""")
-            await message.answer(
-                f"Пользователей: {s['users']} (заказчиков {s['employers']}, исполнителей {s['workers']})\n"
-                f"Открытых заявок: {s['open_jobs']}\nЗа сутки: заявок {s['jobs_day']}, откликов {s['resp_day']}\n"
-                f"Жалоб ждут решения: {s['reports']}")
+            await message.answer(tr(
+                "Пользователей: {users} (заказчиков {employers}, исполнителей {workers})\n"
+                "Открытых заявок: {open_jobs}\nЗа сутки: заявок {jobs_day}, откликов {resp_day}\n"
+                "Жалоб ждут решения: {reports}", **dict(s)))
             return
         parts = (command.args or "").split(maxsplit=1)
         if not parts or not (parts[0].isascii() and parts[0].isdigit()) or not 0 < int(parts[0]) < 2**63:
-            await message.answer(f"Формат: /{command.command} &lt;id пользователя&gt; [причина]")
+            await message.answer(tr("Формат: /{command} &lt;id пользователя&gt; [причина]", command=command.command))
             return
         uid = int(parts[0])
         try:
             async with pool.acquire() as conn, conn.transaction():
                 if command.command == "ban":
                     n = await actions.ban_user(conn, uid, parts[1] if len(parts) > 1 else "нарушение правил")
-                    await message.answer(f"Заблокирован, скрыто заявок: {n}")
+                    await message.answer(tr("Заблокирован, скрыто заявок: {n}", n=n))
                 else:
                     await actions.unban_user(conn, uid)
-                    await message.answer("Разблокирован")
+                    await message.answer(tr("Разблокирован"))
         except actions.ActionError as e:
             await message.answer(e.detail)
 
     @tail.message()
     async def other(message: Message, state: FSMContext) -> None:
         if await state.get_state():
-            await message.answer("Жду ответ на вопрос выше. Прервать: /cancel")
+            await message.answer(tr("Жду ответ на вопрос выше. Прервать: /cancel"))
             return
-        await message.answer("Не понял. Выберите действие в меню внизу или /help.", reply_markup=MENU)
+        await message.answer(tr("Не понял. Выберите действие в меню внизу или /help."), reply_markup=menu())
 
     @tail.callback_query()
     async def stale(call: CallbackQuery) -> None:
-        await call.answer("Эта кнопка устарела. Начните заново из меню.", show_alert=True)
+        await call.answer(tr("Эта кнопка устарела. Начните заново из меню."), show_alert=True)
 
     return dp

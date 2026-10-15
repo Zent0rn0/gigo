@@ -7,6 +7,7 @@ import { Icon } from './Icon';
 import { CategoryTile } from './JobCard';
 import { Sheet } from './Sheet';
 import { Spinner } from './States';
+import { t } from '../i18n';
 
 interface Props {
   workerId: number;
@@ -38,7 +39,7 @@ export function InviteSheet({ workerId, workerName, invited, onInvited, onCreate
       await api.invite(job.id, workerId);
       haptic('success');
       onInvited(job.id);
-      toast(`Приглашение отправлено. ${workerName} получит ссылку на заявку от бота.`);
+      toast(t('Приглашение отправлено. {name} получит ссылку на заявку от бота.', { name: workerName }));
     } catch (e) {
       haptic('error');
       toast(errorText(e));
@@ -48,7 +49,7 @@ export function InviteSheet({ workerId, workerName, invited, onInvited, onCreate
   };
 
   return (
-    <Sheet title={`Пригласить: ${workerName}`} onClose={onClose}>
+    <Sheet title={t('Пригласить: {name}', { name: workerName })} onClose={onClose}>
       {error && <div className="form-error">{error}</div>}
       {!error && jobs == null && (
         <div className="center pad">
@@ -57,10 +58,10 @@ export function InviteSheet({ workerId, workerName, invited, onInvited, onCreate
       )}
       {jobs?.length === 0 && (
         <div className="invite-empty">
-          <p className="hint">Открытых заявок нет. Создайте заявку, потом возвращайтесь сюда.</p>
+          <p className="hint">{t('Открытых заявок нет. Создайте заявку, потом возвращайтесь сюда.')}</p>
           <button type="button" className="btn btn--primary btn--wide" onClick={onCreate}>
             <Icon name="plus" size={18} />
-            Создать заявку
+            {t('Создать заявку')}
           </button>
         </div>
       )}
@@ -79,11 +80,11 @@ export function InviteSheet({ workerId, workerName, invited, onInvited, onCreate
                 {done ? (
                   <span className="status status--ok">
                     <Icon name="check" size={14} strokeWidth={2.4} />
-                    Приглашён
+                    {t('Приглашён')}
                   </span>
                 ) : (
                   <button type="button" className="btn btn--sm btn--primary" disabled={busy != null} onClick={() => invite(j)}>
-                    {busy === j.id ? '…' : 'Позвать'}
+                    {busy === j.id ? '…' : t('Позвать')}
                   </button>
                 )}
               </div>

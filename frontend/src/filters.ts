@@ -1,5 +1,6 @@
 import type { GeoPoint, JobsQuery, Meta, SubscriptionInput } from './types';
 import { rub } from './format';
+import { t } from './i18n';
 
 export interface Filters {
   categories: string[];
@@ -67,15 +68,15 @@ export function subscriptionName(f: Filters, meta: Meta | null): string {
     const labels = f.categories.map((id) => meta?.categories.find((c) => c.id === id)?.label ?? id);
     parts.push(labels.length > 2 ? `${labels.slice(0, 2).join(', ')} +${labels.length - 2}` : labels.join(', '));
   } else {
-    parts.push('Все заказы');
+    parts.push(t('Все заказы'));
   }
-  if (f.payMin != null) parts.push(`от ${rub(f.payMin)}/ч`);
+  if (f.payMin != null) parts.push(t('от {pay}/ч', { pay: rub(f.payMin) }));
   if (f.metro.length) {
     const names = f.metro.map((id) => meta?.metro.find((m) => m.id === id)?.name ?? id);
     parts.push(names.length > 2 ? `${names.slice(0, 2).join(', ')} +${names.length - 2}` : names.join(', '));
   }
-  if (f.nearMe) parts.push(`до ${NEAR_RADIUS_KM} км от меня`);
-  if (f.today) parts.push('сегодня');
+  if (f.nearMe) parts.push(t('до {km} км от меня', { km: NEAR_RADIUS_KM }));
+  if (f.today) parts.push(t('сегодня'));
   return parts.join(' · ');
 }
 

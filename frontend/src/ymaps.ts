@@ -1,4 +1,5 @@
 // Загрузка Яндекс Карт JS API 2.1 по требованию.
+import { getLang } from './i18n';
 
 declare global {
   interface Window {
@@ -18,7 +19,7 @@ export function loadYmaps(): Promise<any> {
       return;
     }
     const s = document.createElement('script');
-    s.src = `https://api-maps.yandex.ru/2.1/?apikey=${encodeURIComponent(YMAPS_KEY)}&lang=ru_RU`;
+    s.src = `https://api-maps.yandex.ru/2.1/?apikey=${encodeURIComponent(YMAPS_KEY)}&lang=${getLang() === 'en' ? 'en_US' : 'ru_RU'}`;
     s.async = true;
     s.onload = () => {
       if (!window.ymaps) return reject(new Error('ymaps missing'));

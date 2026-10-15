@@ -4,6 +4,7 @@ import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { Icon, categoryIcon } from '../components/Icon';
 import { MetroDot } from '../components/MetroDot';
 import { rub } from '../format';
+import { t } from '../i18n';
 import { backButtonSupported, haptic } from '../telegram';
 import type { Meta, Subscription } from '../types';
 
@@ -50,7 +51,7 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
       await api.deleteSubscription(id);
       setSubs((l) => l.filter((s) => s.id !== id));
       haptic('success');
-      toast('Подписка удалена');
+      toast(t('Подписка удалена'));
     } catch (e) {
       haptic('error');
       toast(errorText(e));
@@ -66,13 +67,13 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
         <div className="topbar">
           <button type="button" className="topbar__back" onClick={onBack}>
             <Icon name="chevron-left" size={22} />
-            Назад
+            {t('Назад')}
           </button>
         </div>
       )}
       <header className="feed-head">
-        <h1 className="app-title">Подписки</h1>
-        <p className="hint lead">Новые заявки под ваши фильтры бот пришлёт сообщением в Telegram.</p>
+        <h1 className="app-title">{t('Подписки')}</h1>
+        <p className="hint lead">{t('Новые заявки под ваши фильтры бот пришлёт сообщением в Telegram.')}</p>
       </header>
 
       {status === 'loading' && (
@@ -86,11 +87,11 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
         <EmptyState
           icon="bell"
           tone="brand"
-          title="Подписок пока нет"
-          text="Настройте фильтр в ленте и нажмите «Подписаться на такие заявки»."
+          title={t('Подписок пока нет')}
+          text={t('Настройте фильтр в ленте и нажмите «Подписаться на такие заявки».')}
           action={
             <button type="button" className="btn btn--primary" onClick={onGoFeed}>
-              Перейти в ленту
+              {t('Перейти в ленту')}
             </button>
           }
         />
@@ -106,23 +107,23 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
                     <Icon name="bell" size={18} className="sub-card__bell" />
                     {s.name}
                   </span>
-                  {!s.enabled && <span className="badge">выключена</span>}
+                  {!s.enabled && <span className="badge">{t('выключена')}</span>}
                 </div>
                 <SubDetails sub={s} meta={meta} />
                 <div className="sub-card__actions">
                   {confirmId === s.id ? (
                     <>
                       <button type="button" className="btn btn--sm btn--secondary" onClick={() => setConfirmId(null)} disabled={deleting === s.id}>
-                        Отмена
+                        {t('Отмена')}
                       </button>
                       <button type="button" className="btn btn--sm btn--danger" onClick={() => remove(s.id)} disabled={deleting === s.id}>
-                        {deleting === s.id ? 'Удаляем…' : 'Да, удалить'}
+                        {deleting === s.id ? t('Удаляем…') : t('Да, удалить')}
                       </button>
                     </>
                   ) : (
                     <button type="button" className="btn btn--sm btn--ghost-danger" onClick={() => setConfirmId(s.id)}>
                       <Icon name="trash" size={16} />
-                      Удалить
+                      {t('Удалить')}
                     </button>
                   )}
                 </div>
@@ -130,13 +131,13 @@ export function Subscriptions({ meta, onBack, onGoFeed, toast }: Props) {
             ))}
           </div>
           <div className="hint center pad small">
-            {subs.length} из {LIMIT}.{' '}
+            {t('{n} из {max}.', { n: subs.length, max: LIMIT })}{' '}
             {subs.length < LIMIT ? (
               <button type="button" className="link-btn" onClick={onGoFeed}>
-                Добавить ещё из ленты
+                {t('Добавить ещё из ленты')}
               </button>
             ) : (
-              'Это максимум — удалите ненужную, чтобы добавить новую.'
+              t('Это максимум — удалите ненужную, чтобы добавить новую.')
             )}
           </div>
         </>
@@ -156,8 +157,8 @@ function SubDetails({ sub, meta }: { sub: Subscription; meta: Meta | null }) {
       </span>,
     );
   }
-  if (!sub.categories.length) tags.push(<span key="all" className="tag">Все категории</span>);
-  if (sub.pay_min != null) tags.push(<span key="pay" className="tag"><Icon name="ruble" size={14} />от {rub(sub.pay_min)}/ч</span>);
+  if (!sub.categories.length) tags.push(<span key="all" className="tag">{t('Все категории')}</span>);
+  if (sub.pay_min != null) tags.push(<span key="pay" className="tag"><Icon name="ruble" size={14} />{t('от {sum}/ч', { sum: rub(sub.pay_min) })}</span>);
   for (const id of sub.metro_ids) {
     const m = meta?.metro.find((x) => x.id === id);
     tags.push(
@@ -166,7 +167,7 @@ function SubDetails({ sub, meta }: { sub: Subscription; meta: Meta | null }) {
       </span>,
     );
   }
-  if (sub.radius_km != null && sub.lat != null) tags.push(<span key="r" className="tag"><Icon name="locate" size={14} />до {sub.radius_km} км от вас</span>);
-  if (sub.today_only) tags.push(<span key="t" className="tag"><Icon name="calendar" size={14} />только сегодня</span>);
+  if (sub.radius_km != null && sub.lat != null) tags.push(<span key="r" className="tag"><Icon name="locate" size={14} />{t('до {km} км от вас', { km: sub.radius_km })}</span>);
+  if (sub.today_only) tags.push(<span key="t" className="tag"><Icon name="calendar" size={14} />{t('только сегодня')}</span>);
   return <div className="tags">{tags}</div>;
 }

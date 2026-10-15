@@ -3,6 +3,7 @@ import { formatRating, initial, type Tone } from '../format';
 import { Icon, categoryIcon, type IconName } from './Icon';
 import { openContact } from '../telegram';
 import type { Contact, Meta, UserStub } from '../types';
+import { t } from '../i18n';
 
 const TONE_ICON: Record<Tone, IconName | null> = { ok: 'check', wait: 'clock', bad: 'x', muted: null };
 
@@ -89,7 +90,7 @@ export function ContactButton({ contact, wide }: { contact: Contact; wide?: bool
       onClick={() => openContact(contact.url)}
     >
       <Icon name="message" size={18} />
-      Написать{wide ? ` ${contact.username ? `@${contact.username}` : contact.first_name}` : ''}
+      {t('Написать')}{wide ? ` ${contact.username ? `@${contact.username}` : contact.first_name}` : ''}
     </button>
   );
 }
@@ -98,7 +99,7 @@ const STAR_SIZE = { sm: 14, md: 18, lg: 36 } as const;
 
 /** «★ 4,8 · 12 отзывов» со звездой-иконкой; без отзывов — «нет отзывов». */
 export function RatingText({ rating, count }: { rating: number | null; count: number }) {
-  if (rating == null || !count) return <>нет отзывов</>;
+  if (rating == null || !count) return <>{t('нет отзывов')}</>;
   return (
     <span className="rating">
       <Icon name="star" filled size={13} strokeWidth={1.4} className="rating__star" />
@@ -109,7 +110,7 @@ export function RatingText({ rating, count }: { rating: number | null; count: nu
 
 export function Stars({ value, onChange, size = 'md' }: { value: number; onChange?(v: number): void; size?: 'sm' | 'md' | 'lg' }) {
   return (
-    <span className={`stars stars--${size}`} role={onChange ? 'radiogroup' : undefined} aria-label={`Оценка ${value} из 5`}>
+    <span className={`stars stars--${size}`} role={onChange ? 'radiogroup' : undefined} aria-label={t('Оценка {value} из 5', { value })}>
       {[1, 2, 3, 4, 5].map((n) =>
         onChange ? (
           <button
@@ -159,7 +160,7 @@ export function ConfirmButton({
       <span className="confirm__q">{confirm}</span>
       <div className="row-gap">
         <button type="button" className="btn btn--sm btn--secondary" onClick={() => setAsking(false)}>
-          Нет
+          {t('Нет')}
         </button>
         <button
           type="button"
@@ -169,7 +170,7 @@ export function ConfirmButton({
             onConfirm();
           }}
         >
-          Да
+          {t('Да')}
         </button>
       </div>
     </div>
@@ -179,7 +180,7 @@ export function ConfirmButton({
 /** Навыки исполнителя: категории, которые он отметил в профиле. highlight — категория заявки, совпадение выделено. */
 export function SkillChips({ ids, meta, highlight }: { ids: string[]; meta: Meta; highlight?: string }) {
   return (
-    <div className="skill-chips" aria-label="Умеет">
+    <div className="skill-chips" aria-label={t('Умеет')}>
       {ids.map((id) => (
         <span key={id} className={`skill-chip${id === highlight ? ' skill-chip--match' : ''}`}>
           <Icon name={categoryIcon(id)} size={13} strokeWidth={2.1} />

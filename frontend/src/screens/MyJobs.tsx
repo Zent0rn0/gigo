@@ -4,6 +4,7 @@ import { JobCard, JobCardSkeleton } from '../components/JobCard';
 import { EmptyState, ErrorState } from '../components/States';
 import { Icon } from '../components/Icon';
 import { jobState, plural } from '../format';
+import { t } from '../i18n';
 import type { Job, Meta } from '../types';
 
 interface Props {
@@ -52,36 +53,36 @@ export function MyJobs({ meta, active, version, onOpenJob, onCreate }: Props) {
   const pending = items.reduce((n, j) => n + (j.pending_count ?? 0), 0);
   const stats = [
     { value: open.length, label: plural(open.length, ['открытая', 'открытые', 'открытых']) },
-    { value: items.reduce((n, j) => n + j.responses_count, 0), label: 'откликов всего' },
-    { value: items.reduce((n, j) => n + j.accepted_count, 0), label: 'выбрано людей' },
+    { value: items.reduce((n, j) => n + j.responses_count, 0), label: t('откликов всего') },
+    { value: items.reduce((n, j) => n + j.accepted_count, 0), label: t('выбрано людей') },
   ];
 
   return (
     <div className="screen">
       <header className="feed-head feed-head--row">
         <div>
-          <h1 className="app-title">Мои заявки</h1>
+          <h1 className="app-title">{t('Мои заявки')}</h1>
           <p className="hint lead">
             {pending ? (
               <span className="lead-accent">
                 <Icon name="inbox" size={16} />
-                {pending} {plural(pending, ['отклик ждёт', 'отклика ждут', 'откликов ждут'])} ответа
+                {pending} {plural(pending, ['отклик ждёт ответа', 'отклика ждут ответа', 'откликов ждут ответа'])}
               </span>
             ) : (
-              'Отклики придут сообщением от бота.'
+              t('Отклики придут сообщением от бота.')
             )}
           </p>
         </div>
         {items.length > 0 && (
           <button type="button" className="btn btn--primary btn--sm" onClick={onCreate}>
             <Icon name="plus" size={18} />
-            Новая
+            {t('Новая')}
           </button>
         )}
       </header>
 
       {status === 'ready' && items.length > 0 && (
-        <div className="stats" aria-label="Статистика">
+        <div className="stats" aria-label={t('Статистика')}>
           {stats.map((s) => (
             <div key={s.label} className="stats__item">
               <span className="stats__value">{s.value}</span>
@@ -103,12 +104,12 @@ export function MyJobs({ meta, active, version, onOpenJob, onCreate }: Props) {
         <EmptyState
           icon="clipboard"
           tone="brand"
-          title="Заявок пока нет"
-          text="Опишите задачу и оплату — исполнители откликнутся, а вы выберете подходящих."
+          title={t('Заявок пока нет')}
+          text={t('Опишите задачу и оплату — исполнители откликнутся, а вы выберете подходящих.')}
           action={
             <button type="button" className="btn btn--primary" onClick={onCreate}>
               <Icon name="plus" size={18} />
-              Создать заявку
+              {t('Создать заявку')}
             </button>
           }
         />
@@ -116,7 +117,7 @@ export function MyJobs({ meta, active, version, onOpenJob, onCreate }: Props) {
 
       {status === 'ready' && open.length > 0 && (
         <div className="list">
-          {past.length > 0 && <h2 className="list-title list-title--first">Открытые</h2>}
+          {past.length > 0 && <h2 className="list-title list-title--first">{t('Открытые')}</h2>}
           {open.map((j) => (
             <JobCard key={j.id} job={j} category={catById.get(j.category)} onOpen={onOpenJob} owner />
           ))}
@@ -124,7 +125,7 @@ export function MyJobs({ meta, active, version, onOpenJob, onCreate }: Props) {
       )}
       {status === 'ready' && past.length > 0 && (
         <>
-          <h2 className="list-title">Завершённые</h2>
+          <h2 className="list-title">{t('Завершённые')}</h2>
           <div className="list dim">
             {past.map((j) => (
               <JobCard key={j.id} job={j} category={catById.get(j.category)} onOpen={onOpenJob} owner />

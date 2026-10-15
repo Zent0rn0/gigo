@@ -3,6 +3,7 @@ import type { MetroStation } from '../types';
 import { Sheet } from './Sheet';
 import { MetroDot } from './MetroDot';
 import { Icon } from './Icon';
+import { t } from '../i18n';
 
 interface Props {
   stations: MetroStation[];
@@ -34,22 +35,22 @@ export function MetroPicker({ stations, selected, onApply, onClose, single }: Pr
 
   return (
     <Sheet
-      title={single ? 'Станция метро' : 'Метро'}
+      title={single ? t('Станция метро') : t('Метро')}
       onClose={onClose}
       footer={
         single ? (
           picked.length > 0 && (
             <button type="button" className="btn btn--secondary btn--wide" onClick={() => onApply([])}>
-              Без метро
+              {t('Без метро')}
             </button>
           )
         ) : (
         <div className="row-gap">
           <button type="button" className="btn btn--secondary" onClick={() => setPicked([])} disabled={!picked.length}>
-            Сбросить
+            {t('Сбросить')}
           </button>
           <button type="button" className="btn btn--primary btn--grow" onClick={() => onApply(picked)}>
-            {picked.length ? `Показать · ${picked.length}` : 'Любая станция'}
+            {picked.length ? t('Показать · {n}', { n: picked.length }) : t('Любая станция')}
           </button>
         </div>
         )
@@ -60,8 +61,8 @@ export function MetroPicker({ stations, selected, onApply, onClose, single }: Pr
         <input
           className="input input--search"
           type="search"
-          placeholder="Найти станцию или линию"
-          aria-label="Найти станцию или линию"
+          placeholder={t('Найти станцию или линию')}
+          aria-label={t('Найти станцию или линию')}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoFocus={false}
@@ -81,7 +82,7 @@ export function MetroPicker({ stations, selected, onApply, onClose, single }: Pr
             </li>
           );
         })}
-        {!list.length && <li className="hint pad">Ничего не нашлось</li>}
+        {!list.length && <li className="hint pad">{t('Ничего не нашлось')}</li>}
       </ul>
     </Sheet>
   );

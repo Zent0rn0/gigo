@@ -3,8 +3,10 @@ import { api, errorText } from '../api';
 import { HelpSheet, type HelpTopic } from '../components/HelpSheet';
 import { Icon, categoryIcon, type IconName } from '../components/Icon';
 import { Logo } from '../components/Logo';
+import { Sheet } from '../components/Sheet';
 import { Avatar, Stars } from '../components/ui';
 import { plural } from '../format';
+import { LANGUAGES, N_, setLang, t, useLang, type Lang } from '../i18n';
 import { haptic } from '../telegram';
 import type { Me, Meta, Role } from '../types';
 
@@ -21,15 +23,15 @@ interface Props {
 const MAX_ABOUT = 500;
 
 const ROLES: { id: Role; label: string; icon: IconName }[] = [
-  { id: 'worker', label: 'Исполнитель', icon: 'briefcase' },
-  { id: 'employer', label: 'Заказчик', icon: 'users' },
+  { id: 'worker', label: N_('Исполнитель'), icon: 'briefcase' },
+  { id: 'employer', label: N_('Заказчик'), icon: 'users' },
 ];
 
-function MenuRow({ icon, title, text, onClick }: { icon: IconName; title: string; text: string; onClick(): void }) {
+function MenuRow({ icon, glyph, title, text, onClick }: { icon?: IconName; glyph?: string; title: string; text: string; onClick(): void }) {
   return (
     <button type="button" className="menu-row" onClick={onClick}>
-      <span className="menu-row__icon">
-        <Icon name={icon} size={20} />
+      <span className="menu-row__icon" aria-hidden={glyph ? true : undefined}>
+        {glyph ? <span style={{ fontSize: 20, lineHeight: 1 }}>{glyph}</span> : icon && <Icon name={icon} size={20} />}
       </span>
       <span className="menu-row__text">
         <span className="menu-row__title">{title}</span>
@@ -45,6 +47,10 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
   const [saving, setSaving] = useState(false);
   const [switching, setSwitching] = useState(false);
   const [help, setHelp] = useState<HelpTopic | null>(null);
+  const lang = useLang();
+  const curLang = LANGUAGES.find((l) => l.id === lang) ?? LANGUAGES[0];
+  const [langOpen, setLangOpen] = useState(false);
+  const [langBusy, setLangBusy] = useState(false);
   useEffect(() => setAbout(me.about ?? ''), [me.about]);
   const dirty = about.trim() !== (me.about ?? '').trim();
 
@@ -54,7 +60,7 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
       const upd = await api.updateMe({ about: about.trim() });
       haptic('success');
       onMeChange(upd);
-      toast('Сохранено');
+      toast(t('Сохранено'));
     } catch (e) {
       haptic('error');
       toast(errorText(e));
@@ -78,6 +84,28 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
       haptic('error');
       toast(errorText(e));
     }
+  };
+
+  // язык сохраняется на сервере (бот пишет на нём же), затем всё приложение перерисовывается на новом языке
+  const chooseLang = async (next: Lang) => {
+    if (langBusy) return;
+    if (next === lang) {
+      setLangOpen(false);
+      return;
+    }
+    haptic('select');
+    setLangBusy(true);
+    try {
+      onMeChange(await api.updateMe({ lang: next }));
+    } catch (e) {
+      haptic('error');
+      toast(errorText(e));
+      setLangBusy(false);
+      return;
+    }
+    setLangOpen(false);
+    setLangBusy(false);
+    await setLang(next);
   };
 
   const switchTo = async (role: Role) => {
@@ -107,7 +135,7 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
                 </span>
               </>
             ) : (
-              <span className="hint small">Отзывов пока нет</span>
+              <span className="hint small">{t('Отзывов пока нет')}</span>
             )}
           </div>
         </div>
@@ -115,7 +143,7 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
 
       <section className="panel">
         <div className="field__label" id="role-label">
-          Я сейчас
+          {t('Я сейчас')}
         </div>
         <div className="segmented" role="radiogroup" aria-labelledby="role-label">
           {ROLES.map((r) => (
@@ -129,20 +157,20 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
               onClick={() => switchTo(r.id)}
             >
               <Icon name={r.icon} size={18} />
-              {r.label}
+              {t(r.label)}
             </button>
           ))}
         </div>
         <div className="hint small">
-          {me.role === 'employer' ? 'Создаёте заявки и выбираете исполнителей.' : 'Смотрите заявки и откликаетесь.'} Роль можно менять в
-          любой момент.
+          {me.role === 'employer' ? t('Создаёте заявки и выбираете исполнителей.') : t('Смотрите заявки и откликаетесь.')}{' '}
+          {t('Роль можно менять в любой момент.')}
         </div>
       </section>
 
       {me.role === 'worker' && (
         <section className="panel">
-          <div className="field__label">Что умею</div>
-          <div className="chips chips--wrap" role="group" aria-label="Что умею">
+          <div className="field__label">{t('Что умею')}</div>
+          <div className="chips chips--wrap" role="group" aria-label={t('Что умею')}>
             {meta.categories.map((c) => {
               const on = skills.includes(c.id);
               return (
@@ -153,21 +181,21 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
               );
             })}
           </div>
-          <div className="hint small">Заказчики увидят это в отклике и найдут вас в каталоге исполнителей, а в ленте появится фильтр «Только мои навыки».</div>
+          <div className="hint small">{t('Заказчики увидят это в отклике и найдут вас в каталоге исполнителей, а в ленте появится фильтр «Только мои навыки».')}</div>
         </section>
       )}
 
       <section className="panel">
         <label className="field">
-          <span className="field__label">О себе</span>
+          <span className="field__label">{t('О себе')}</span>
           <textarea
             className="input textarea"
             rows={4}
             maxLength={MAX_ABOUT}
             placeholder={
               me.role === 'employer'
-                ? 'Кто вы и какие задачи обычно бывают'
-                : 'Опыт, что умеете, есть ли машина или инструмент. Заказчик увидит это в отклике.'
+                ? t('Кто вы и какие задачи обычно бывают')
+                : t('Опыт, что умеете, есть ли машина или инструмент. Заказчик увидит это в отклике.')
             }
             value={about}
             onChange={(e) => setAbout(e.target.value)}
@@ -178,27 +206,57 @@ export function Profile({ me, meta, onMeChange, onSwitchRole, onOpenUser, onOpen
             {about.length}/{MAX_ABOUT}
           </span>
           <button type="button" className="btn btn--sm btn--primary" onClick={save} disabled={!dirty || saving}>
-            {saving ? 'Сохраняем…' : 'Сохранить'}
+            {saving ? t('Сохраняем…') : t('Сохранить')}
           </button>
         </div>
       </section>
 
       <section className="panel panel--menu">
-        <MenuRow icon="user" title="Мой профиль" text="Так вас видят другие: рейтинг и отзывы" onClick={() => onOpenUser(me.id)} />
+        <MenuRow glyph={curLang.flag} title={t('Язык')} text={curLang.name} onClick={() => setLangOpen(true)} />
+      </section>
+
+      <section className="panel panel--menu">
+        <MenuRow icon="user" title={t('Мой профиль')} text={t('Так вас видят другие: рейтинг и отзывы')} onClick={() => onOpenUser(me.id)} />
         {me.role === 'worker' && (
-          <MenuRow icon="bell" title="Подписки на заявки" text="Бот пришлёт новые заявки под ваш фильтр" onClick={onOpenSubs} />
+          <MenuRow icon="bell" title={t('Подписки на заявки')} text={t('Бот пришлёт новые заявки под ваш фильтр')} onClick={onOpenSubs} />
         )}
-        <MenuRow icon="help" title="Как это работает" text="Отклики, контакты, отзывы" onClick={() => setHelp('how')} />
-        <MenuRow icon="shield" title="Безопасность" text="Не платите вперёд и не передавайте карты" onClick={() => setHelp('safety')} />
-        <MenuRow icon="flag" title="Как пожаловаться" text="На заявку или заказчика" onClick={() => setHelp('report')} />
+        <MenuRow icon="help" title={t('Как это работает')} text={t('Отклики, контакты, отзывы')} onClick={() => setHelp('how')} />
+        <MenuRow icon="shield" title={t('Безопасность')} text={t('Не платите вперёд и не передавайте карты')} onClick={() => setHelp('safety')} />
+        <MenuRow icon="flag" title={t('Как пожаловаться')} text={t('На заявку или заказчика')} onClick={() => setHelp('report')} />
       </section>
 
       <footer className="app-foot">
         <Logo height={22} />
-        <span className="hint small">Альфа-версия · подработка в Москве</span>
+        <span className="hint small">{t('Альфа-версия · подработка в Москве')}</span>
       </footer>
 
       {help && <HelpSheet topic={help} onClose={() => setHelp(null)} />}
+      {langOpen && (
+        <Sheet title={t('Язык')} onClose={() => setLangOpen(false)}>
+          <div role="radiogroup" aria-label={t('Язык')} style={{ display: 'flex', flexDirection: 'column', paddingBottom: 'calc(12px + var(--safe-bottom))' }}>
+            {LANGUAGES.map((l) => (
+              <button
+                key={l.id}
+                type="button"
+                role="radio"
+                aria-checked={l.id === lang}
+                lang={l.id}
+                className="menu-row"
+                disabled={langBusy}
+                onClick={() => chooseLang(l.id)}
+              >
+                <span className="menu-row__icon" aria-hidden="true">
+                  <span style={{ fontSize: 20, lineHeight: 1 }}>{l.flag}</span>
+                </span>
+                <span className="menu-row__text">
+                  <span className="menu-row__title">{l.name}</span>
+                </span>
+                {l.id === lang && <Icon name="check" size={20} className="user-row__chev" />}
+              </button>
+            ))}
+          </div>
+        </Sheet>
+      )}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import { Component, Fragment, type ErrorInfo, type ReactNode } from 'react';
 import { EmptyState } from './States';
 import { Icon } from './Icon';
+import { t } from '../i18n';
 
 type Props = {
   children: ReactNode;
@@ -47,21 +48,21 @@ export class ErrorBoundary extends Component<Props, State> {
         <EmptyState
           icon="alert"
           tone="danger"
-          title="Что-то сломалось"
+          title={t('Что-то сломалось')}
           text={
             root
-              ? 'Приложение споткнулось. Перезапустите его, ваши данные на месте.'
-              : 'Этот экран не открылся. Попробуйте ещё раз, остальное приложение работает.'
+              ? t('Приложение споткнулось. Перезапустите его, ваши данные на месте.')
+              : t('Этот экран не открылся. Попробуйте ещё раз, остальное приложение работает.')
           }
           action={
             <div className="state__actions">
               <button type="button" className="btn btn--primary" onClick={root ? this.restart : this.retry}>
                 <Icon name="refresh" size={18} />
-                {root ? 'Перезапустить' : 'Повторить'}
+                {root ? t('Перезапустить') : t('Повторить')}
               </button>
               {onBack && (
                 <button type="button" className="btn btn--secondary" onClick={onBack}>
-                  Назад
+                  {t('Назад')}
                 </button>
               )}
             </div>

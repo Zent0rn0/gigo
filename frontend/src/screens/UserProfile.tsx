@@ -4,6 +4,7 @@ import { EmptyState, ErrorState, Spinner } from '../components/States';
 import { Icon } from '../components/Icon';
 import { Avatar, SkillChips, Stars } from '../components/ui';
 import { formatDate, formatRating, plural } from '../format';
+import { t } from '../i18n';
 import { backButtonSupported } from '../telegram';
 import { InviteSheet } from '../components/InviteSheet';
 import type { Meta, UserProfile as Profile, Role } from '../types';
@@ -58,7 +59,7 @@ export function UserProfile({ userId, isMe, meta, viewerRole, onBack, onCreateJo
         <div className="topbar">
           <button type="button" className="topbar__back" onClick={onBack}>
             <Icon name="chevron-left" size={22} />
-            Назад
+            {t('Назад')}
           </button>
         </div>
       )}
@@ -67,7 +68,7 @@ export function UserProfile({ userId, isMe, meta, viewerRole, onBack, onCreateJo
           <Spinner />
         </div>
       )}
-      {status === 'notfound' && <EmptyState icon="user" title="Профиль не найден" />}
+      {status === 'notfound' && <EmptyState icon="user" title={t('Профиль не найден')} />}
       {status === 'error' && <ErrorState text={error} onRetry={() => setAttempt((a) => a + 1)} />}
       {status === 'ready' && user && (
         <>
@@ -75,11 +76,11 @@ export function UserProfile({ userId, isMe, meta, viewerRole, onBack, onCreateJo
             <Avatar name={user.first_name} size={72} />
             <h1 className="detail__title">
               {user.first_name}
-              {isMe && <span className="hint"> · это вы</span>}
+              {isMe && <span className="hint"> · {t('это вы')}</span>}
             </h1>
             <div className="hint profile-card__role">
               <Icon name={user.role === 'employer' ? 'users' : 'briefcase'} size={16} />
-              {user.role === 'employer' ? 'Заказчик' : user.role === 'worker' ? 'Исполнитель' : 'Новичок'}
+              {user.role === 'employer' ? t('Заказчик') : user.role === 'worker' ? t('Исполнитель') : t('Новичок')}
               {' · '}
               {user.role === 'employer'
                 ? `${user.jobs_count} ${plural(user.jobs_count, ['заявка', 'заявки', 'заявок'])}`
@@ -90,10 +91,10 @@ export function UserProfile({ userId, isMe, meta, viewerRole, onBack, onCreateJo
                 <>
                   <span className="profile-card__score">{user.rating.toFixed(1).replace('.', ',')}</span>
                   <Stars value={Math.round(user.rating)} />
-                  <span className="hint small">{formatRating(user.rating, user.reviews_count).replace(/^★ [\d,]+ · /, '')}</span>
+                  <span className="hint small">{formatRating(user.rating, user.reviews_count).replace(/^★ [\d.,]+ · /, '')}</span>
                 </>
               ) : (
-                <span className="hint">Отзывов пока нет</span>
+                <span className="hint">{t('Отзывов пока нет')}</span>
               )}
             </div>
             {user.role === 'worker' && !!user.skills?.length && <SkillChips ids={user.skills} meta={meta} />}
@@ -101,17 +102,17 @@ export function UserProfile({ userId, isMe, meta, viewerRole, onBack, onCreateJo
             {canInvite && (
               <button type="button" className="btn btn--primary btn--wide profile-card__invite" onClick={() => setInviteOpen(true)}>
                 <Icon name="send" size={18} />
-                {user.invited_job_ids?.length ? 'Пригласить ещё на заявку' : 'Пригласить на заявку'}
+                {user.invited_job_ids?.length ? t('Пригласить ещё на заявку') : t('Пригласить на заявку')}
               </button>
             )}
           </div>
 
           {user.reviews.length === 0 && user.rating == null && (
-            <p className="hint small center pad">Отзывы появятся после первой работы через Gigo.</p>
+            <p className="hint small center pad">{t('Отзывы появятся после первой работы через Gigo.')}</p>
           )}
           {user.reviews.length > 0 && (
             <section>
-              <h2 className="list-title">Отзывы</h2>
+              <h2 className="list-title">{t('Отзывы')}</h2>
               <div className="list">
                 {user.reviews.map((r, i) => (
                   <div key={i} className="review-card">
