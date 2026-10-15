@@ -34,11 +34,19 @@ def validate_init_data(init_data: str, bot_token: str, now: float | None = None)
     expected = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, received):
         raise InitDataError("подпись не сходится")
-    auth_date = int(pairs.get("auth_date", "0") or 0)
+    try:
+        auth_date = int(pairs.get("auth_date", "0") or 0)
+    except ValueError as e:
+        raise InitDataError("неверная дата входа") from e
     if (now or time.time()) - auth_date > MAX_AGE:
         raise InitDataError("данные устарели")
     try:
         user = json.loads(pairs["user"])
-        return TgUser(int(user["id"]), user.get("username"), user.get("first_name"))
-    except (KeyError, ValueError, TypeError) as e:
+        uid = int(user["id"])
+        username, first_name = user.get("username"), user.get("first_name")
+    except (KeyError, ValueError, TypeError, AttributeError) as e:
         raise InitDataError("нет пользователя") from e
+    if not 0 < uid < 2**63:
+        raise InitDataError("нет пользователя")
+    return TgUser(uid, username if isinstance(username, str) else None,
+                  first_name if isinstance(first_name, str) else None)
