@@ -391,3 +391,136 @@ async def test_banners_and_custom_emoji(env, monkeypatch):
         assert "tg-emoji" not in me.last() and look.EMOJI.enabled is False
     finally:
         look.EMOJI.set({})
+
+
+# --- устойчивость: ошибки, флуд, сбои Telegram -------------------------------------------
+
+async def test_errors_never_leave_user_hanging(env, monkeypatch):
+    import asyncpg
+    from gigo import actions
+    from gigo.bot import safety
+
+    emp, me = Chat_(env, EMPLOYER, "Анна"), Chat_(env, WORKER, "Иван")
+    job_id = await _create_job(emp)
+    await me.say("/jobs")
+    await me.press("1")
+
+    # база отвалилась посреди нажатия: всплывает понятное сообщение, бот живёт дальше
+    async def db_down(*a, **kw):
+        raise asyncpg.exceptions.ConnectionDoesNotExistError("connection was closed")
+    monkeypatch.setattr(actions, "respond", db_down)
+    await me.press("🙋 Откликнуться")
+    assert me.alerts()[-1] == safety.TEXT_DOWN
+
+    # ошибка в коде посреди диалога: сообщение и сброс диалога, чтобы не застрять
+    async def broken(*a, **kw):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(actions, "respond", broken)
+    await me.press("✍️ С сообщением")
+    await me.say("Буду через час")
+    assert me.last() == safety.TEXT_FAIL
+    await me.say("ещё текст")
+    assert "Не понял" in me.last()   # диалог сброшен
+
+    # подделанная кнопка с огромным числом не доходит до базы
+    await me.env.dp.feed_update(env.bot, Update(update_id=next(_ids), callback_query=CallbackQuery(
+        id="z", from_user=me.user, chat_instance="ci", data="job:99999999999999999999999",
+        message=_message(next(_ids), WORKER, "x", bot_id=env.bot.id))))
+    assert "устарела" in me.alerts()[-1]
+    await me.env.dp.feed_update(env.bot, Update(update_id=next(_ids), callback_query=CallbackQuery(
+        id="z2", from_user=me.user, chat_instance="ci", data="near:999:1.2.3:0",
+        message=_message(next(_ids), WORKER, "x", bot_id=env.bot.id))))
+    assert "устарела" in me.alerts()[-1]
+    await me.say(f"/start job_{job_id}")
+    assert "Разгрузить" in me.last()
+
+
+async def test_flood_groups_and_block(env):
+    me = Chat_(env, WORKER, "Иван")
+    for _ in range(40):
+        await me.say("/help")
+    texts = [m["text"] for m in me.inbox()]
+    assert texts.count("Слишком часто. Подождите пару секунд.") == 1   # предупреждение один раз
+    assert len(texts) < 35
+
+    # в группе бот молчит и выходит из неё
+    left = []
+    real = env.session.make_request
+
+    async def spy(bot, method, timeout=None):
+        if type(method).__name__ == "LeaveChat":
+            left.append(method.chat_id)
+        return await real(bot, method, timeout)
+    env.session.make_request = spy
+    group = Chat(id=-100, type="supergroup", title="g")
+    before = len(env.session.messages)
+    await env.dp.feed_update(env.bot, Update(update_id=next(_ids), message=Message(
+        message_id=next(_ids), date=datetime.now(timezone.utc), chat=group, from_user=User(id=1, is_bot=False,
+                                                                                         first_name="x"),
+        text="/start")))
+    assert len(env.session.messages) == before
+
+    from aiogram.types import ChatMemberBanned, ChatMemberLeft, ChatMemberMember, ChatMemberUpdated
+    bot_user = User(id=env.bot.id, is_bot=True, first_name="Gigo")
+    await env.dp.feed_update(env.bot, Update(update_id=next(_ids), my_chat_member=ChatMemberUpdated(
+        chat=group, from_user=me.user, date=datetime.now(timezone.utc),
+        old_chat_member=ChatMemberLeft(user=bot_user), new_chat_member=ChatMemberMember(user=bot_user))))
+    assert left == [-100]
+
+    # человек заблокировал бота: больше ему не пишем
+    await env.dp.feed_update(env.bot, Update(update_id=next(_ids), my_chat_member=ChatMemberUpdated(
+        chat=Chat(id=WORKER, type="private"), from_user=me.user, date=datetime.now(timezone.utc),
+        old_chat_member=ChatMemberMember(user=bot_user),
+        new_chat_member=ChatMemberBanned(user=bot_user, until_date=0))))
+    assert await env.pool.fetchval("SELECT bot_blocked FROM users WHERE tg_id = $1", WORKER)
+
+
+async def test_outbox_survives_telegram_outage(env, monkeypatch):
+    from aiogram.exceptions import TelegramNetworkError
+    from gigo.bot import loops
+
+    emp, me = Chat_(env, EMPLOYER, "Анна"), Chat_(env, WORKER, "Иван")
+    await _create_job(emp)
+    await me.say("/jobs")
+    await me.press("1")
+    await me.press("🙋 Откликнуться")   # заказчику уходит событие об отклике
+
+    real = env.session.make_request
+
+    async def offline(bot, method, timeout=None):
+        raise TelegramNetworkError(method=method, message="Request timeout error")
+    monkeypatch.setattr(env.session, "make_request", offline)
+    try:
+        for _ in range(10):   # сколько угодно сбоев не съедают попытки
+            loops._paused_until = 0
+            assert await loops.send_outbox_once(env.bot, env.pool, env.settings) == 0
+        row = await env.pool.fetchrow("SELECT sent_at, attempts FROM outbox ORDER BY id DESC LIMIT 1")
+        assert row["sent_at"] is None and row["attempts"] == 0
+        assert loops.paused()
+        monkeypatch.setattr(env.session, "make_request", real)
+        assert await loops.send_outbox_once(env.bot, env.pool, env.settings) == 0   # пауза ещё идёт
+        loops._paused_until = 0
+        assert await loops.send_outbox_once(env.bot, env.pool, env.settings) >= 1
+        assert "отклик" in emp.last().lower()
+    finally:
+        loops._paused_until = 0
+
+
+async def test_plain_text_fallback():
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import SendMessage
+    from gigo.bot import look
+
+    calls = []
+
+    async def make_request(bot, method):
+        calls.append(method)
+        if method.parse_mode is None and len(method.text) <= look.TEXT_LIMIT:
+            return "ok"
+        raise TelegramBadRequest(method=method, message="Bad Request: can't parse entities: unclosed tag")
+
+    m = look.PlainFallbackMiddleware()
+    assert await m(make_request, None, SendMessage(chat_id=1, text="<b>Привет &amp; пока", parse_mode="HTML")) == "ok"
+    assert calls[-1].text == "Привет & пока"
+    assert await m(make_request, None, SendMessage(chat_id=1, text="<b>xx</b>" * 3000, parse_mode="HTML")) == "ok"
+    assert len(calls[-1].text) == look.TEXT_LIMIT

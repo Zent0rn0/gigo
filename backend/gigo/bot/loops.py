@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
 
 from aiogram import Bot
@@ -10,7 +11,7 @@ from aiogram.exceptions import TelegramBadRequest, TelegramForbiddenError, Teleg
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
 from gigo import config, events
-from gigo.bot import look
+from gigo.bot import look, safety
 from gigo.format import job_message
 from gigo.rules import MSK
 
@@ -65,25 +66,51 @@ def app_button(settings: config.Settings, text: str, path: str = "") -> InlineKe
     return keyboard(settings, [[{"text": text, "path": path}]])
 
 
-async def _send(bot: Bot, pool, user_id: int, text: str, markup, banner: str | None = None) -> bool | None:
-    """True: отправлено; False: не отправится никогда; None: повторить позже."""
+SENT, FAILED, RETRY = "sent", "failed", "retry"
+
+# Telegram попросил подождать (флуд-лимит) или недоступен: до этого момента рассылки не шлём.
+_paused_until = 0.0
+PAUSE_ON_OUTAGE = 30
+
+
+def paused() -> bool:
+    return time.monotonic() < _paused_until
+
+
+def _pause(seconds: float) -> None:
+    global _paused_until
+    _paused_until = max(_paused_until, time.monotonic() + seconds)
+
+
+async def _send(bot: Bot, pool, user_id: int, text: str, markup, banner: str | None = None) -> str:
+    """SENT: доставлено; FAILED: не доставится никогда (бот заблокирован, плохое сообщение);
+    RETRY: Telegram недоступен или просит подождать, повторить позже и пока не слать остальным."""
     try:
         await look.send(bot, user_id, text, markup, banner, disable_web_page_preview=True)
-        return True
+        return SENT
     except TelegramRetryAfter as e:
-        await asyncio.sleep(e.retry_after)
-        return None
+        log.warning("Telegram просит подождать %s с", e.retry_after)
+        _pause(e.retry_after)
+        return RETRY
     except TelegramForbiddenError:
         await pool.execute("UPDATE users SET bot_blocked = TRUE WHERE tg_id = $1", user_id)
-        return False
+        return FAILED
     except TelegramBadRequest as e:
         log.warning("сообщение %s не отправилось: %s", user_id, e)
-        return False
+        return FAILED
+    except Exception as e:
+        if not safety.is_transient(e):
+            raise
+        log.warning("Telegram недоступен, рассылка на паузе %d с: %r", PAUSE_ON_OUTAGE, e)
+        _pause(PAUSE_ON_OUTAGE)
+        return RETRY
     finally:
         await asyncio.sleep(SEND_PAUSE)
 
 
 async def notify_once(bot: Bot, pool, settings: config.Settings, since: datetime) -> int:
+    if paused():
+        return 0
     rows = await pool.fetch(MATCHES_SQL, since)
     sent = 0
     for r in rows:
@@ -94,18 +121,27 @@ async def notify_once(bot: Bot, pool, settings: config.Settings, since: datetime
         )
         if not claimed:
             continue
-        ok = await _send(bot, pool, r["user_id"], job_message(r, r["metro_name"], r["subscription_name"]),
-                         keyboard(settings, [[{"text": "🙋 Откликнуться", "data": f"ap:{r['id']}"},
-                                              {"text": "📄 Подробнее", "data": f"job:{r['id']}"}],
-                                             [{"text": "Открыть в приложении", "path": f"?job={r['id']}"}]]))
-        if ok is None:
+        try:
+            result = await _send(bot, pool, r["user_id"], job_message(r, r["metro_name"], r["subscription_name"]),
+                                 keyboard(settings, [[{"text": "🙋 Откликнуться", "data": f"ap:{r['id']}"},
+                                                      {"text": "📄 Подробнее", "data": f"job:{r['id']}"}],
+                                                     [{"text": "Открыть в приложении", "path": f"?job={r['id']}"}]]))
+        except Exception:
+            log.exception("заявка %s для %s не отправилась", r["id"], r["user_id"])
+            result = FAILED   # уведомление о новой заявке не критично: второй раз не пытаемся
+        if result == RETRY:
+            # Отметку снимаем, чтобы прислать, когда Telegram оживёт (заявка ещё будет в окне LOOKBACK).
             await pool.execute("DELETE FROM notifications WHERE user_id = $1 AND job_id = $2", r["user_id"], r["id"])
-        sent += bool(ok)
+            break
+        sent += result == SENT
     return sent
 
 
 async def send_outbox_once(bot: Bot, pool, settings: config.Settings) -> int:
-    """Отправляет накопившиеся события. Каждое уходит один раз."""
+    """Отправляет накопившиеся события. Каждое уходит один раз; при сбое Telegram ждёт, при своей ошибке
+    пробует до MAX_ATTEMPTS раз."""
+    if paused():
+        return 0
     rows = await pool.fetch(
         "SELECT o.id, o.user_id, o.text, o.buttons, o.banner FROM outbox o JOIN users u ON u.tg_id = o.user_id "
         "WHERE o.sent_at IS NULL AND o.attempts < $1 AND NOT u.bot_blocked ORDER BY o.id LIMIT 100",
@@ -113,20 +149,25 @@ async def send_outbox_once(bot: Bot, pool, settings: config.Settings) -> int:
     )
     sent = 0
     for r in rows:
-        claimed = await pool.fetchval(
-            "UPDATE outbox SET sent_at = now(), attempts = attempts + 1 WHERE id = $1 AND sent_at IS NULL RETURNING 1",
+        attempt = await pool.fetchval(
+            "UPDATE outbox SET sent_at = now(), attempts = attempts + 1 WHERE id = $1 AND sent_at IS NULL "
+            "RETURNING attempts",
             r["id"],
         )
-        if not claimed:
+        if not attempt:
             continue
-        buttons = json.loads(r["buttons"]) if isinstance(r["buttons"], str) else r["buttons"]
         try:
-            ok = await _send(bot, pool, r["user_id"], r["text"], keyboard(settings, buttons), r["banner"])
+            buttons = json.loads(r["buttons"]) if isinstance(r["buttons"], str) else r["buttons"]
+            result = await _send(bot, pool, r["user_id"], r["text"], keyboard(settings, buttons), r["banner"])
         except Exception:
-            ok = None
-        if ok is None:
+            log.exception("событие %s не отправилось (попытка %d из %d)", r["id"], attempt, MAX_ATTEMPTS)
             await pool.execute("UPDATE outbox SET sent_at = NULL WHERE id = $1", r["id"])
-        sent += bool(ok)
+            continue
+        if result == RETRY:
+            # Сбой не наш: попытку не засчитываем, остальные события подождут вместе с этим.
+            await pool.execute("UPDATE outbox SET sent_at = NULL, attempts = attempts - 1 WHERE id = $1", r["id"])
+            break
+        sent += result == SENT
     return sent
 
 

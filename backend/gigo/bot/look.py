@@ -194,3 +194,32 @@ class PrettyMiddleware(BaseRequestMiddleware):
             log.warning("премиум-эмодзи недоступны (нужен Telegram Premium у владельца бота): %s", e)
             EMOJI.enabled = False
             return await make_request(bot, method)
+
+
+# --- запасной вариант для текста, который Telegram не принял --------------------------
+
+TEXT_LIMIT = 4096
+
+
+class PlainFallbackMiddleware(BaseRequestMiddleware):
+    """Если Telegram не разобрал HTML или текст слишком длинный, отправляем то же простым текстом (обрезав),
+    чтобы человек всё равно получил сообщение."""
+
+    async def __call__(self, make_request, bot, method):
+        try:
+            return await make_request(bot, method)
+        except TelegramBadRequest as e:
+            err = str(e).lower()
+            if "can't parse entities" not in err and "too long" not in err:
+                raise
+            field, limit = (("text", TEXT_LIMIT) if isinstance(method, (SendMessage, EditMessageText))
+                            else ("caption", CAPTION_LIMIT) if isinstance(method, (SendPhoto, EditMessageCaption))
+                            else (None, 0))
+            if not field or not getattr(method, field):
+                raise
+            plain = _plain(getattr(method, field))
+            if len(plain) > limit:
+                plain = plain[:limit - 1] + "…"
+            log.warning("сообщение ушло простым текстом: %s", e)
+            update = {field: plain, "parse_mode": None, ("entities" if field == "text" else "caption_entities"): None}
+            return await make_request(bot, method.model_copy(update=update))

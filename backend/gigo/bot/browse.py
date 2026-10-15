@@ -113,7 +113,14 @@ def make_router(settings: config.Settings, pool):
     @r.callback_query(F.data.regexp(r"^near:-?[\d.]+:-?[\d.]+:\d+$"))
     async def near_more(call: CallbackQuery) -> None:
         _, lat, lng, offset = call.data.split(":")
-        text, markup = await feed_page(call.from_user.id, "*", int(offset), float(lat), float(lng))
+        try:
+            lat, lng = float(lat), float(lng)
+        except ValueError:
+            lat = lng = 1000.0
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            await call.answer("Эта кнопка устарела. Пришлите геопозицию заново.", show_alert=True)
+            return
+        text, markup = await feed_page(call.from_user.id, "*", int(offset), lat, lng)
         await replace(call, text, markup)
         await call.answer()
 
