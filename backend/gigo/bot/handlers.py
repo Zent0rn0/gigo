@@ -10,7 +10,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import BotCommand, CallbackQuery, Message
 
 from gigo import actions, config
-from gigo.bot import browse, create, look, manage
+from gigo.bot import browse, create, look, manage, safety
 from gigo.bot.common import MENU, Kb, UserMiddleware, btn, note
 from gigo.bot.loops import app_button, keyboard
 
@@ -56,11 +56,12 @@ WELCOME = (
     "<b>Что вы ищете?</b>"
 )
 
-_START_PAYLOAD = re.compile(r"^(job_\d+|tab_[a-z]+)$")
+_START_PAYLOAD = re.compile(r"^(job_\d{1,18}|tab_[a-z]{1,20})$")
 
 
 def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
     dp = Dispatcher(storage=MemoryStorage())
+    safety.install(dp, pool)
     dp.message.outer_middleware(UserMiddleware(pool))
     dp.callback_query.outer_middleware(UserMiddleware(pool))
     admins = set(settings.admin_ids)
@@ -207,7 +208,7 @@ def make_dispatcher(settings: config.Settings, pool) -> Dispatcher:
                 f"Жалоб ждут решения: {s['reports']}")
             return
         parts = (command.args or "").split(maxsplit=1)
-        if not parts or not parts[0].isdigit():
+        if not parts or not (parts[0].isascii() and parts[0].isdigit()) or not 0 < int(parts[0]) < 2**63:
             await message.answer(f"Формат: /{command.command} &lt;id пользователя&gt; [причина]")
             return
         uid = int(parts[0])
