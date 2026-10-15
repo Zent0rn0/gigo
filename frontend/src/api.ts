@@ -25,12 +25,20 @@ import type {
 export const MOCK = import.meta.env.VITE_MOCK === '1';
 const BASE = '/api';
 
+/** network: запрос не дошёл; timeout: сервер не ответил вовремя; http: ответ с ошибкой; parse: ответ не разобрать. */
+export type ApiErrorKind = 'network' | 'timeout' | 'http' | 'parse';
+
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly kind: ApiErrorKind;
+  /** Запрос менял данные (не GET): после обрыва неизвестно, применился ли он. */
+  readonly unsafe: boolean;
+  constructor(status: number, message: string, kind: ApiErrorKind = 'http', unsafe = false) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.kind = kind;
+    this.unsafe = unsafe;
   }
 }
 
@@ -82,29 +90,117 @@ function headers(json: boolean): HeadersInit {
   return h;
 }
 
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
-  let res: Response;
+/** Сколько ждём ответа сервера. Чтение — меньше: его можно тихо повторить. */
+const TIMEOUT_READ_MS = 15_000;
+const TIMEOUT_WRITE_MS = 25_000;
+/** Паузы перед повторами GET при обрыве связи или 502/503/504 (перезапуск сервера при обновлении). */
+const RETRY_DELAYS_MS = [700, 2000];
+const RETRY_STATUSES = new Set([502, 503, 504]);
+
+function abortError(): DOMException {
+  return new DOMException('Aborted', 'AbortError');
+}
+
+function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(abortError());
+    const t = window.setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      window.clearTimeout(t);
+      reject(abortError());
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+/** Текст ошибки из тела ответа: FastAPI отдаёт detail строкой, списком {msg} (валидация) или объектом. */
+export function detailOf(body: unknown): string {
+  if (!body || typeof body !== 'object') return '';
+  const b = body as Record<string, unknown>;
+  const d = b.detail;
+  if (typeof d === 'string') return d;
+  if (Array.isArray(d)) {
+    const first = d[0] as Record<string, unknown> | undefined;
+    if (first && typeof first.msg === 'string') return first.msg;
+  }
+  if (d && typeof d === 'object') {
+    const o = d as Record<string, unknown>;
+    if (typeof o.message === 'string') return o.message;
+    if (typeof o.detail === 'string') return o.detail;
+  }
+  if (typeof b.message === 'string') return b.message;
+  return '';
+}
+
+/** Одна попытка: fetch с тайм-аутом, разбор ответа. */
+async function attempt<T>(path: string, init: RequestInit, unsafe: boolean): Promise<T> {
+  const outer = init.signal;
+  if (outer?.aborted) throw abortError();
+  const ctrl = new AbortController();
+  let timedOut = false;
+  const timer = window.setTimeout(
+    () => {
+      timedOut = true;
+      ctrl.abort();
+    },
+    unsafe ? TIMEOUT_WRITE_MS : TIMEOUT_READ_MS,
+  );
+  const onOuterAbort = () => ctrl.abort();
+  outer?.addEventListener('abort', onOuterAbort, { once: true });
   try {
-    res = await fetch(BASE + path, { ...init, headers: headers(init.body != null) });
-  } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') throw e;
-    throw new ApiError(0, 'Нет связи с сервером');
-  }
-  if (!res.ok) {
-    let detail = '';
+    let res: Response;
     try {
-      const body = await res.json();
-      if (body && typeof body.detail === 'string') detail = body.detail;
-      // FastAPI-валидация: detail — массив {msg, loc}
-      else if (body && Array.isArray(body.detail) && body.detail[0]?.msg) detail = String(body.detail[0].msg);
+      res = await fetch(BASE + path, { ...init, signal: ctrl.signal, headers: headers(init.body != null) });
     } catch {
-      /* тело не JSON */
+      if (outer?.aborted) throw abortError();
+      if (timedOut) throw new ApiError(0, 'Сервер не ответил вовремя', 'timeout', unsafe);
+      throw new ApiError(0, 'Нет связи с сервером', 'network', unsafe);
     }
-    if (isBlockedError(res.status, detail)) reportBlocked(detail);
-    throw new ApiError(res.status, detail || `Ошибка ${res.status}`);
+    if (!res.ok) {
+      let detail = '';
+      try {
+        detail = detailOf(await res.json());
+      } catch {
+        /* тело не JSON: например, страница прокси при перезапуске сервера */
+      }
+      if (isBlockedError(res.status, detail)) reportBlocked(detail);
+      throw new ApiError(res.status, detail || `Ошибка ${res.status}`, 'http', unsafe);
+    }
+    if (res.status === 204) return undefined as T;
+    try {
+      const text = await res.text();
+      return (text ? JSON.parse(text) : undefined) as T;
+    } catch {
+      if (outer?.aborted) throw abortError();
+      if (timedOut) throw new ApiError(0, 'Сервер не ответил вовремя', 'timeout', unsafe);
+      throw new ApiError(res.status, 'Непонятный ответ сервера', 'parse', unsafe);
+    }
+  } finally {
+    window.clearTimeout(timer);
+    outer?.removeEventListener('abort', onOuterAbort);
   }
-  if (res.status === 204) return undefined as T;
-  return (await res.json()) as T;
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  const unsafe = method !== 'GET';
+  for (let i = 0; ; i++) {
+    try {
+      return await attempt<T>(path, init, unsafe);
+    } catch (e) {
+      // Менять данные повторно не пытаемся: запрос мог дойти, и повтор создал бы дубль.
+      const retriable =
+        !unsafe &&
+        e instanceof ApiError &&
+        (e.kind === 'network' || e.kind === 'timeout' || RETRY_STATUSES.has(e.status)) &&
+        i < RETRY_DELAYS_MS.length;
+      if (!retriable) throw e;
+      await sleep(RETRY_DELAYS_MS[i], init.signal);
+    }
+  }
 }
 
 const json = (method: string, body: unknown): RequestInit => ({ method, body: JSON.stringify(body) });
@@ -250,14 +346,39 @@ export const api = {
   },
 };
 
+const CYRILLIC = /[а-яё]/i;
+
+/** Сообщение сервера можно показать человеку: русский текст, а не «Not Found» или «Ошибка 418». */
+function humanDetail(msg: string): string {
+  return msg && CYRILLIC.test(msg) && !/^Ошибка \d+$/.test(msg) ? msg : '';
+}
+
+/** Понятный человеку текст для любой ошибки: показываем его в тостах и на экранах ошибок. */
 export function errorText(e: unknown): string {
   if (e instanceof ApiError) {
-    if (e.status === 401) return 'Не удалось войти. Откройте приложение из бота в Telegram.';
-    if (e.status === 0) return 'Нет связи с сервером. Проверьте интернет.';
-    if (e.status === 429) return e.message && !/^Ошибка \d+$/.test(e.message) ? e.message : 'Слишком много действий подряд. Попробуйте чуть позже.';
-    if (e.status >= 500) return 'Сервер временно недоступен. Попробуйте ещё раз.';
-    return e.message;
+    const human = humanDetail(e.message);
+    if (e.kind === 'network' || e.kind === 'timeout') {
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
+      const base = offline
+        ? 'Нет интернета. Проверьте подключение.'
+        : e.kind === 'timeout'
+          ? 'Сервер долго не отвечает. Проверьте интернет и попробуйте ещё раз.'
+          : 'Нет связи с сервером. Проверьте интернет.';
+      return e.unsafe ? `${base} Если действие не применилось, повторите его.` : base;
+    }
+    if (e.kind === 'parse') return 'Сервер ответил с ошибкой. Попробуйте ещё раз чуть позже.';
+    if (e.status === 401) return 'Не удалось войти. Закройте приложение и откройте его снова из бота в Telegram.';
+    if (e.status === 429) return human || 'Слишком много действий подряд. Попробуйте чуть позже.';
+    if (e.status >= 500) return 'Сервер временно недоступен. Попробуйте ещё раз через минуту.';
+    if (human) return human;
+    if (e.status === 403) return 'Это действие вам недоступно.';
+    if (e.status === 404) return 'Не нашли: возможно, это уже удалили.';
+    if (e.status === 409) return 'Не получилось: данные уже изменились. Обновите экран.';
+    if (e.status === 413) return 'Слишком большой запрос. Сократите текст.';
+    if (e.status === 400 || e.status === 422) return 'Проверьте введённые данные.';
+    return 'Что-то пошло не так. Попробуйте ещё раз.';
   }
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'Нет интернета. Проверьте подключение.';
   return 'Что-то пошло не так. Попробуйте ещё раз.';
 }
 

@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
+import { useOnReconnect } from '../network';
 
 export function EmptyState({
   icon,
@@ -27,6 +28,7 @@ export function EmptyState({
 }
 
 export function ErrorState({ text, onRetry }: { text: string; onRetry(): void }) {
+  useOnReconnect(onRetry);
   return (
     <EmptyState
       icon="alert"
