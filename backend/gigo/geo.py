@@ -20,7 +20,19 @@ class Geocoder:
         self.city_name = city_name
         self.http = httpx.AsyncClient(timeout=15) if api_key else None
 
+    async def close(self) -> None:
+        if self.http:
+            await self.http.aclose()
+
     async def locate(self, address: str) -> tuple[float, float] | None:
+        """Точка или None. Сбой геокодера или кэша не мешает сохранить заявку: она просто будет без точки."""
+        try:
+            return await self._locate(address)
+        except Exception:
+            log.exception("геокодер: не удалось найти адрес")
+            return None
+
+    async def _locate(self, address: str) -> tuple[float, float] | None:
         if not self.http or not address:
             return None
         query = f"{self.city_name}, {address.strip()}"[:300]
@@ -47,17 +59,19 @@ class Geocoder:
             })
             resp.raise_for_status()
             members = resp.json()["response"]["GeoObjectCollection"]["featureMember"]
+            if not members:
+                return None
+            obj = members[0]["GeoObject"]
+            precision = obj.get("metaDataProperty", {}).get("GeocoderMetaData", {}).get("precision")
+            if precision == "other":  # нашёлся только город целиком: такой точке не верим
+                return None
+            lng, lat = map(float, obj["Point"]["pos"].split())
         except httpx.HTTPStatusError as e:  # в тексте исключения URL с ключом: в лог его не пишем
             log.warning("геокодер ответил %s", e.response.status_code)
             return None
-        except (httpx.HTTPError, KeyError, ValueError) as e:
+        except (httpx.HTTPError, KeyError, IndexError, TypeError, AttributeError, ValueError) as e:
             log.warning("геокодер: %s", type(e).__name__)
             return None
-        if not members:
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
             return None
-        obj = members[0]["GeoObject"]
-        precision = obj.get("metaDataProperty", {}).get("GeocoderMetaData", {}).get("precision")
-        if precision == "other":  # нашёлся только город целиком: такой точке не верим
-            return None
-        lng, lat = map(float, obj["Point"]["pos"].split())
         return lat, lng

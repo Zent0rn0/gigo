@@ -3,6 +3,7 @@
     uvicorn gigo.api.app:app --port 8000
 """
 
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -11,12 +12,14 @@ from datetime import date, datetime, time, timezone
 from pathlib import Path
 from typing import Annotated, Literal
 
+import asyncpg
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
 from gigo import actions, config, db, events, rules
+from gigo.api import errors
 from gigo.api.auth import InitDataError, TgUser, validate_init_data
 from gigo.actions import check_recent
 from gigo.api.limits import RateLimiter
@@ -34,17 +37,31 @@ MAX_SKILLS = len(CATEGORIES)
 STATIC_DIR = Path(os.getenv("STATIC_DIR", config.ROOT / "frontend" / "dist"))
 
 
+class BaseModel(_BaseModel):
+    # NaN и бесконечность в числах не принимаем: в сравнениях и в базе они ведут себя неожиданно
+    model_config = ConfigDict(allow_inf_nan=False)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = config.load()
-    await migrate(settings.database_url)
+    # База может подниматься дольше API (перезапуск сервера): ждём её, а не падаем.
+    await db.wait_ready(lambda: migrate(settings.database_url))
     app.state.settings = settings
-    app.state.pool = await db.connect(settings.database_url)
+    app.state.pool = await db.wait_ready(lambda: db.connect(settings.database_url))
     app.state.geocoder = Geocoder(settings.yandex_geocoder_key, app.state.pool, CITY["name"])
     if not settings.bot_token and not settings.dev_auth:
         log.warning("BOT_TOKEN не задан: вход из Mini App работать не будет")
-    yield
-    await app.state.pool.close()
+    try:
+        yield
+    finally:
+        await app.state.geocoder.close()
+        try:
+            await asyncio.wait_for(app.state.pool.close(), timeout=10)
+        except (TimeoutError, OSError):
+            app.state.pool.terminate()
 
 
 # Документация API открыта только в режиме разработки.
@@ -54,10 +71,7 @@ app = FastAPI(title="Gigo", lifespan=lifespan, docs_url="/api/docs" if _DEV else
 
 mutations = RateLimiter(limit=60, window=60)
 
-
-@app.exception_handler(actions.ActionError)
-async def action_error(request: Request, e: actions.ActionError):
-    return JSONResponse({"detail": e.detail}, status_code=e.status)
+errors.install(app)
 
 
 @app.middleware("http")
@@ -68,6 +82,10 @@ async def security_headers(request: Request, call_next):
     if request.url.path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
     return response
+
+
+# Добавлен последним, значит снаружи всех: request_id, лимит тела и времени ответа.
+app.add_middleware(errors.GuardMiddleware)
 
 
 # --- вход ---------------------------------------------------------------
@@ -144,7 +162,10 @@ def pool(request: Request):
 
 @app.get("/api/health")
 async def health(request: Request):
-    await pool(request).fetchval("SELECT 1")
+    try:
+        await pool(request).fetchval("SELECT 1", timeout=3)
+    except (*db.NOT_READY, asyncpg.PostgresError):
+        return JSONResponse({"ok": False, "db": False}, status_code=503)
     return {"ok": True}
 
 
@@ -167,10 +188,16 @@ async def get_me(request: Request, user: User):
     return me_out(await pool(request).fetchrow(ME_SQL, user.id))
 
 
+# id из справочников (категория, метро, единица оплаты): короткие строки
+Short = Annotated[str, Field(max_length=50)]
+# id в базе: bigint, больше не бывает
+Id = Annotated[int, Field(ge=1, le=2**63 - 1)]
+
+
 class MeIn(BaseModel):
     role: Literal["employer", "worker"] | None = None
     about: str | None = Field(default=None, max_length=500)
-    skills: list[str] | None = Field(default=None, max_length=MAX_SKILLS)
+    skills: list[Short] | None = Field(default=None, max_length=MAX_SKILLS)
 
 
 def _skills(ids: list[str]) -> list[str]:
@@ -342,17 +369,17 @@ async def load_job(p, user: Me, job_id: int) -> dict:
 async def list_jobs(
     request: Request,
     user: User,
-    category: Annotated[list[str], Query()] = [],
-    pay_min: float | None = None,
-    metro: Annotated[list[str], Query()] = [],
+    category: Annotated[list[str], Query(max_length=50)] = [],
+    pay_min: Annotated[float | None, Query(ge=0, le=1_000_000, allow_inf_nan=False)] = None,
+    metro: Annotated[list[str], Query(max_length=100)] = [],
     today: bool = False,
-    lat: Annotated[float | None, Query(ge=-90, le=90)] = None,
-    lng: Annotated[float | None, Query(ge=-180, le=180)] = None,
-    radius_km: Annotated[float | None, Query(gt=0, le=100)] = None,
+    lat: Annotated[float | None, Query(ge=-90, le=90, allow_inf_nan=False)] = None,
+    lng: Annotated[float | None, Query(ge=-180, le=180, allow_inf_nan=False)] = None,
+    radius_km: Annotated[float | None, Query(gt=0, le=100, allow_inf_nan=False)] = None,
     sort: Annotated[str, Query(pattern="^(fresh|distance|pay)$")] = "fresh",
     with_location: bool = False,
     limit: Annotated[int, Query(ge=1, le=500)] = 30,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
     q: Annotated[str | None, Query(max_length=100)] = None,
 ):
     f = JobFilter(category, pay_min, metro, today, lat, lng, radius_km, with_location, sort, limit, offset,
@@ -380,17 +407,17 @@ async def my_jobs(request: Request, user: User):
 # --- заявки: создание и статус ------------------------------------------------
 
 class JobIn(BaseModel):
-    category: str
+    category: Short
     title: str = Field(min_length=3, max_length=100)
     description: str | None = Field(default=None, max_length=2000)
     workers_needed: int = Field(default=1, ge=1, le=50)
     pay_amount: float = Field(gt=0, le=1_000_000)
-    pay_unit: str
+    pay_unit: Short
     pay_timing: str | None = Field(default=None, max_length=50)
     starts_on: date | None = None
     start_time: str | None = Field(default=None, pattern=r"^([01]?\d|2[0-3]):[0-5]\d$")
     duration_hours: float | None = Field(default=None, gt=0, le=24)
-    metro_id: str | None = None
+    metro_id: Short | None = None
     address: str | None = Field(default=None, max_length=200)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
@@ -419,25 +446,33 @@ async def create_job(request: Request, body: JobIn, user: User):
 async def edit_job(request: Request, job_id: int, body: JobIn, user: User):
     """Правка открытой заявки автором. Откликнувшимся приходит сообщение, что условия изменились."""
     p = pool(request)
+
+    def check_editable(job) -> None:
+        if not job or job["employer_id"] != user.id:
+            raise HTTPException(404, "Заявка не найдена")
+        if job["hidden_at"]:
+            raise HTTPException(409, "Заявку скрыл модератор, изменить её нельзя.")
+        if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc):
+            raise HTTPException(409, "Изменить можно только открытую заявку. Для новой даты нажмите «Повторить».")
+
     job = await p.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
-    if not job or job["employer_id"] != user.id:
-        raise HTTPException(404, "Заявка не найдена")
-    if job["hidden_at"]:
-        raise HTTPException(409, "Заявку скрыл модератор, изменить её нельзя.")
-    if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc):
-        raise HTTPException(409, "Изменить можно только открытую заявку. Для новой даты нажмите «Повторить».")
+    check_editable(job)
+    # Поля и геокодер до транзакции: запрос к Яндексу не держит блокировку заявки.
     async with p.acquire() as conn:
         fields = await actions.job_fields(conn, request.app.state.geocoder, _new_job(body), job["created_at"])
     if fields["expires_at"] <= datetime.now(timezone.utc):
         # Заявка без даты старше трёх дней: правка не продлевает её бесконечно.
         raise HTTPException(409, "Срок заявки прошёл. Создайте новую.")
-    if fields["workers_needed"] < (accepted := await p.fetchval(
-            "SELECT count(*) FROM responses WHERE job_id = $1 AND status = 'accepted'", job_id)):
-        raise HTTPException(422, f"Вы уже выбрали {accepted} исполнителей: меньше указать нельзя.")
     n = len(actions.JOB_COLUMNS)
     sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(actions.JOB_COLUMNS, start=2))
     location = actions.LOCATION_SQL.format(lat=n + 2, lng=n + 3)
     async with p.acquire() as conn, conn.transaction():
+        # Пока считали поля, заявку могли закрыть или скрыть: проверяем ещё раз под блокировкой.
+        job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1 FOR UPDATE", job_id)
+        check_editable(job)
+        if fields["workers_needed"] < (accepted := await conn.fetchval(
+                "SELECT count(*) FROM responses WHERE job_id = $1 AND status = 'accepted'", job_id)):
+            raise HTTPException(422, f"Вы уже выбрали {accepted} исполнителей: меньше указать нельзя.")
         await conn.execute(
             f"UPDATE jobs SET {sets}, location = {location}, updated_at = now() WHERE id = $1",
             job_id, *(fields[c] for c in actions.JOB_COLUMNS), fields["lat"], fields["lng"],
@@ -533,10 +568,10 @@ async def unsave_job(request: Request, job_id: int, user: User):
 async def list_workers(
     request: Request,
     user: User,
-    category: str | None = None,
+    category: Annotated[str | None, Query(max_length=50)] = None,
     q: Annotated[str | None, Query(max_length=100)] = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 30,
-    offset: Annotated[int, Query(ge=0)] = 0,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ):
     """Исполнители с заполненным профилем (навыки или «О себе»): лучшие по рейтингу сверху."""
     require_role(user, "employer")
@@ -564,7 +599,7 @@ async def list_workers(
 
 
 class InviteIn(BaseModel):
-    worker_id: int
+    worker_id: Id
 
 
 @app.post("/api/jobs/{job_id}/invites", status_code=204)
@@ -615,7 +650,7 @@ async def report_job(request: Request, job_id: int, body: ReportIn, user: User):
 # --- отзывы ---------------------------------------------------------------
 
 class ReviewIn(BaseModel):
-    response_id: int
+    response_id: Id
     rating: int = Field(ge=1, le=5)
     text: str | None = Field(default=None, max_length=1000)
 
@@ -631,9 +666,9 @@ async def create_review(request: Request, body: ReviewIn, user: User):
 
 class SubscriptionIn(BaseModel):
     name: str = Field(min_length=1, max_length=100)
-    categories: list[str] = []
-    pay_min: float | None = Field(default=None, ge=0)
-    metro_ids: list[str] = []
+    categories: list[Short] = Field(default=[], max_length=50)
+    pay_min: float | None = Field(default=None, ge=0, le=1_000_000)
+    metro_ids: list[Short] = Field(default=[], max_length=100)
     lat: float | None = Field(default=None, ge=-90, le=90)
     lng: float | None = Field(default=None, ge=-180, le=180)
     radius_km: float | None = Field(default=None, gt=0, le=100)
@@ -691,6 +726,8 @@ if (STATIC_DIR / "index.html").exists():
 
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str):
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(404, "Не найдено")
         file = (STATIC_DIR / path).resolve()
         if path and file.is_file() and STATIC_DIR.resolve() in file.parents:
             return FileResponse(file)
