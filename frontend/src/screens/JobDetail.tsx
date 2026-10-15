@@ -164,7 +164,7 @@ export function JobDetail({
   );
 
   const withdraw = async () => {
-    if (!job || !my) return;
+    if (!job || !my || busy) return;
     setBusy('withdraw');
     try {
       const r = await api.setResponseStatus(my.id, 'withdrawn');
@@ -175,13 +175,14 @@ export function JobDetail({
     } catch (e) {
       haptic('error');
       toast(errorText(e));
+      reload(); // заявка могла измениться на сервере или запрос всё-таки прошёл: показываем как есть
     } finally {
       setBusy(null);
     }
   };
 
   const setJobStatus = async (s: JobStatus) => {
-    if (!job) return;
+    if (!job || busy) return;
     setBusy(`job-${s}`);
     try {
       const j = await api.setJobStatus(job.id, s);
@@ -192,13 +193,14 @@ export function JobDetail({
     } catch (e) {
       haptic('error');
       toast(errorText(e));
+      reload(); // заявка могла измениться на сервере или запрос всё-таки прошёл: показываем как есть
     } finally {
       setBusy(null);
     }
   };
 
   const decide = async (r: JobResponse, s: Exclude<ResponseStatus, 'pending' | 'withdrawn'>) => {
-    if (!job) return;
+    if (!job || busy) return;
     setBusy(`resp-${r.id}`);
     try {
       const upd = await api.setResponseStatus(r.id, s);
@@ -210,6 +212,7 @@ export function JobDetail({
     } catch (e) {
       haptic('error');
       toast(errorText(e));
+      reload(); // заявка могла измениться на сервере или запрос всё-таки прошёл: показываем как есть
     } finally {
       setBusy(null);
     }
