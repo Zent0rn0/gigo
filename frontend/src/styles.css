@@ -2882,3 +2882,30 @@ button.job-card:active {
   font-size: 12px;
   color: var(--hint);
 }
+
+/* ——— сбои: нет сети, упавший экран ——— */
+.offline {
+  position: fixed;
+  top: calc(max(env(safe-area-inset-top, 0px), var(--tg-safe-area-inset-top, 0px)) + var(--tg-content-safe-area-inset-top, 0px) + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: calc(100% - 32px);
+  max-width: 480px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--danger);
+  color: #fff;
+  font-size: 14px;
+  line-height: 1.35;
+  text-align: center;
+  z-index: 60;
+  box-shadow: var(--shadow-lg);
+  animation: toast-in 0.2s ease-out;
+}
+
+.state__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}

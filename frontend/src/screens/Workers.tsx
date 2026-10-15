@@ -26,6 +26,7 @@ export function Workers({ meta, active, onOpenUser }: Props) {
   const [error, setError] = useState('');
   const [attempt, setAttempt] = useState(0);
   const [more, setMore] = useState(false);
+  const [moreError, setMoreError] = useState(false);
   const ctrl = useRef<AbortController | null>(null);
 
   useEffect(() => {
@@ -39,6 +40,7 @@ export function Workers({ meta, active, onOpenUser }: Props) {
     const c = new AbortController();
     ctrl.current = c;
     setStatus((s) => (s === 'ready' && !category && !q ? s : 'loading'));
+    setMoreError(false);
     api
       .workers({ category, q, limit: PAGE }, c.signal)
       .then((page) => {
@@ -56,14 +58,20 @@ export function Workers({ meta, active, onOpenUser }: Props) {
   }, [active, category, q, attempt]);
 
   const loadMore = () => {
+    // тот же контроллер, что у первой страницы: сменили фильтр — старая догрузка не допишется в новый список
+    const c = ctrl.current;
     setMore(true);
+    setMoreError(false);
     api
-      .workers({ category, q, limit: PAGE, offset: items.length })
+      .workers({ category, q, limit: PAGE, offset: items.length }, c?.signal)
       .then((page) => {
+        if (c?.signal.aborted) return;
         setItems((prev) => [...prev, ...page.items.filter((w) => !prev.some((x) => x.id === w.id))]);
         setTotal(page.total);
       })
-      .catch(() => undefined)
+      .catch((e) => {
+        if (!isAbort(e) && !c?.signal.aborted) setMoreError(true);
+      })
       .finally(() => setMore(false));
   };
 
@@ -168,7 +176,7 @@ export function Workers({ meta, active, onOpenUser }: Props) {
                 <Spinner />
               ) : (
                 <button type="button" className="btn btn--secondary btn--wide" onClick={loadMore}>
-                  Показать ещё
+                  {moreError ? 'Не загрузилось. Ещё раз' : 'Показать ещё'}
                 </button>
               )}
             </div>

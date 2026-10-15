@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { api, errorText, onBlocked } from './api';
+import { ApiError, api, errorText, onBlocked } from './api';
 import { ROLE_TABS, TabBar, type Tab } from './components/TabBar';
 import { EmptyState, ErrorState, Spinner } from './components/States';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { LogoMark } from './components/Logo';
 import { loadFilters, saveFilters, type Filters } from './filters';
 import { getPosition } from './geo';
+import { useOnline } from './network';
 import { CreateJob } from './screens/CreateJob';
 import { Feed } from './screens/Feed';
 import { JobDetail } from './screens/JobDetail';
@@ -82,6 +84,19 @@ export function App() {
   const [toastText, setToastText] = useState<string | null>(null);
 
   const toast = useCallback((text: string) => setToastText(text), []);
+  const online = useOnline();
+
+  // Ошибка запроса, которую экран забыл поймать, всё равно доходит до человека, а не теряется в консоли.
+  useEffect(() => {
+    const onRejection = (e: PromiseRejectionEvent) => {
+      if (e.reason instanceof ApiError) {
+        e.preventDefault();
+        setToastText(errorText(e.reason));
+      }
+    };
+    window.addEventListener('unhandledrejection', onRejection);
+    return () => window.removeEventListener('unhandledrejection', onRejection);
+  }, []);
   useEffect(() => {
     if (!toastText) return;
     const t = window.setTimeout(() => setToastText(null), 3500);
@@ -266,10 +281,19 @@ export function App() {
     [enterRole, toast],
   );
 
-  const toastEl = toastText && (
-    <div className={`toast${hasOverlay ? ' toast--low' : ''}`} role="status" onClick={() => setToastText(null)}>
-      {toastText}
-    </div>
+  const toastEl = (
+    <>
+      {!online && (
+        <div className="offline" role="status">
+          Нет интернета. Показываем то, что успели загрузить.
+        </div>
+      )}
+      {toastText && (
+        <div className={`toast${hasOverlay ? ' toast--low' : ''}`} role="status" onClick={() => setToastText(null)}>
+          {toastText}
+        </div>
+      )}
+    </>
   );
 
   if (blocked) {
@@ -303,6 +327,7 @@ export function App() {
             <Spinner />
           </div>
         )}
+        {toastEl}
       </div>
     );
   }
@@ -310,14 +335,16 @@ export function App() {
   if (!me.role) {
     return (
       <div className="app">
-        <Onboarding
-          me={me}
-          city={meta.city.name}
-          onDone={(u) => {
-            setMe(u);
-            if (u.role) enterRole(u.role, true);
-          }}
-        />
+        <ErrorBoundary name="onboarding">
+          <Onboarding
+            me={me}
+            city={meta.city.name}
+            onDone={(u) => {
+              setMe(u);
+              if (u.role) enterRole(u.role, true);
+            }}
+          />
+        </ErrorBoundary>
         {toastEl}
       </div>
     );
@@ -334,6 +361,7 @@ export function App() {
         const top = i === stack.length - 1;
         return (
           <div key={o.key} className="layer" hidden={!top}>
+            <ErrorBoundary name={o.kind} onBack={pop}>
             {o.kind === 'job' && (
               <JobDetail
                 jobId={o.id}
@@ -391,6 +419,7 @@ export function App() {
                 toast={toast}
               />
             )}
+            </ErrorBoundary>
           </div>
         );
       })}
@@ -398,6 +427,7 @@ export function App() {
       <div className="tabs" hidden={hasOverlay}>
         {shown('feed') && (
           <div className="pane" hidden={tab !== 'feed'}>
+            <ErrorBoundary name="feed">
             <Feed
               meta={meta}
               active={on('feed')}
@@ -411,15 +441,19 @@ export function App() {
               toast={toast}
               skills={me.skills ?? []}
             />
+            </ErrorBoundary>
           </div>
         )}
         {shown('map') && (
           <div className="pane" hidden={tab !== 'map'}>
+            <ErrorBoundary name="map">
             <MapView meta={meta} filters={filters} location={location} active={on('map')} onOpenJob={openJob} />
+            </ErrorBoundary>
           </div>
         )}
         {shown('responses') && (
           <div className="pane" hidden={tab !== 'responses'}>
+            <ErrorBoundary name="responses">
             <MyResponses
               meta={meta}
               active={on('responses')}
@@ -429,15 +463,19 @@ export function App() {
               onChanged={bump}
               toast={toast}
             />
+            </ErrorBoundary>
           </div>
         )}
         {shown('my') && (
           <div className="pane" hidden={tab !== 'my'}>
+            <ErrorBoundary name="my">
             <MyJobs meta={meta} active={on('my')} version={version} onOpenJob={openJob} onCreate={() => switchTab('create')} />
+            </ErrorBoundary>
           </div>
         )}
         {shown('create') && (
           <div className="pane" hidden={tab !== 'create'}>
+            <ErrorBoundary name="create">
             <CreateJob
               meta={meta}
               me={me}
@@ -450,16 +488,21 @@ export function App() {
                 push({ kind: 'job', id: job.id, job }, 0);
               }}
             />
+            </ErrorBoundary>
           </div>
         )}
         {shown('workers') && (
           <div className="pane" hidden={tab !== 'workers'}>
+            <ErrorBoundary name="workers">
             <Workers meta={meta} active={on('workers')} onOpenUser={openUser} />
+            </ErrorBoundary>
           </div>
         )}
         {shown('profile') && (
           <div className="pane" hidden={tab !== 'profile'}>
+            <ErrorBoundary name="profile">
             <Profile me={me} meta={meta} onMeChange={setMe} onSwitchRole={switchRole} onOpenUser={openUser} onOpenSubs={openSubs} toast={toast} />
+            </ErrorBoundary>
           </div>
         )}
         <TabBar tabs={tabs} tab={tab} onChange={switchTab} />
