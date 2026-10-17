@@ -91,3 +91,16 @@ async def test_errors_and_meta_follow_x_lang(api):
     no_auth = await api.get("/api/me", headers={"X-Lang": "en"})
     assert no_auth.status_code == 401 and no_auth.json()["detail"] == i18n.translate(
         "Откройте приложение из Telegram", "en")
+
+
+async def test_bot_message_in_recipient_language(pool):
+    from gigo import events
+    await pool.execute("INSERT INTO users (tg_id, first_name, lang) VALUES (11, 'A', 'en'), (12, 'B', NULL)")
+    job = {"id": 5, "title": "Разгрузка"}
+    async with pool.acquire() as conn:
+        await events.cancelled(conn, job, 11)
+        await events.cancelled(conn, job, 12)
+    rows = {r["user_id"]: r["text"] for r in await pool.fetch("SELECT user_id, text FROM outbox")}
+    assert "Разгрузка" in rows[11] and "Разгрузка" in rows[12]
+    assert rows[11] != rows[12] and "Заявка отменена" in rows[12] and "Заявка отменена" not in rows[11]
+    assert i18n.current() == "ru", "язык получателя не протекает в остальной код"
