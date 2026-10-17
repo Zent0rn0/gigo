@@ -5,6 +5,7 @@ import { EmptyState, Spinner } from '../components/States';
 import { Icon } from '../components/Icon';
 import { filtersToQuery, isEmptyFilter, type Filters } from '../filters';
 import { formatPay, formatWhen, plural } from '../format';
+import { t } from '../i18n';
 import { YMAPS_KEY, loadYmaps } from '../ymaps';
 import type { GeoPoint, Job, Meta } from '../types';
 
@@ -24,8 +25,8 @@ export function MapView(props: Props) {
       <div className="screen">
         <EmptyState
           icon="map"
-          title="Карта скоро появится"
-          text="Пока все заявки есть во вкладке «Лента». Для карты нужен ключ Яндекс Карт."
+          title={t('Карта скоро появится')}
+          text={t('Пока все заявки есть во вкладке «Лента». Для карты нужен ключ Яндекс Карт.')}
         />
       </div>
     );
@@ -132,7 +133,7 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
                 hintContent: esc(`${j.title}${pay ? ` · ${pay}` : ''}`),
                 clusterCaption: esc(pay ?? j.title),
                 balloonContentHeader: esc(j.title),
-                balloonContentBody: `<div class="ymap-balloon">${esc(sub)}<br><button type="button" class="ymap-open" data-gigo-job="${j.id}">Подробнее</button></div>`,
+                balloonContentBody: `<div class="ymap-balloon">${esc(sub)}<br><button type="button" class="ymap-open" data-gigo-job="${j.id}">${esc(t('Подробнее'))}</button></div>`,
               },
             };
           }),
@@ -156,7 +157,7 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
       meRef.current = null;
     }
     if (location) {
-      const me = new ymaps.Placemark([location.lat, location.lng], { hintContent: 'Вы здесь' }, { preset: 'islands#geolocationIcon', iconColor: '#2481cc' });
+      const me = new ymaps.Placemark([location.lat, location.lng], { hintContent: t('Вы здесь') }, { preset: 'islands#geolocationIcon', iconColor: '#2481cc' });
       map.geoObjects.add(me);
       meRef.current = me;
     }
@@ -177,13 +178,13 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
       <div className="map-status">
         {mapState === 'loading' && (
           <span className="map-pill">
-            <Spinner /> Загружаем карту…
+            <Spinner /> {t('Загружаем карту…')}
           </span>
         )}
         {mapState === 'error' && (
           <span className="map-pill">
             <Icon name="alert" size={16} />
-            Карта не загрузилась.{' '}
+            {t('Карта не загрузилась.')}{' '}
             <button
               type="button"
               className="link-btn"
@@ -192,25 +193,25 @@ function YandexMap({ meta, filters, location, active, onOpenJob }: Props) {
                 setReload((r) => r + 1);
               }}
             >
-              Повторить
+              {t('Повторить')}
             </button>
           </span>
         )}
         {mapState === 'ready' && data.status === 'loading' && (
           <span className="map-pill">
-            <Spinner /> Ищем заявки…
+            <Spinner /> {t('Ищем заявки…')}
           </span>
         )}
         {mapState === 'ready' && data.status === 'ready' && (
           <span className="map-pill">
-            {data.count} {plural(data.count, ['заявка', 'заявки', 'заявок'])} на карте
-            {!isEmptyFilter(filters) && ' · фильтр как в ленте'}
+            {t('{n} {jobs} на карте', { n: data.count, jobs: plural(data.count, ['заявка', 'заявки', 'заявок']) })}
+            {!isEmptyFilter(filters) && ` · ${t('фильтр как в ленте')}`}
           </span>
         )}
         {mapState === 'ready' && data.status === 'error' && <span className="map-pill">{data.error}</span>}
       </div>
       {location && mapState === 'ready' && (
-        <button type="button" className="map-me" onClick={centerOnMe} aria-label="Показать, где я" title="Где я">
+        <button type="button" className="map-me" onClick={centerOnMe} aria-label={t('Показать, где я')} title={t('Где я')}>
           <Icon name="locate" size={22} />
         </button>
       )}

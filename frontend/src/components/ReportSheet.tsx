@@ -4,12 +4,13 @@ import { haptic } from '../telegram';
 import type { ReportReason } from '../types';
 import { Icon, type IconName } from './Icon';
 import { Sheet } from './Sheet';
+import { t, N_ } from '../i18n';
 
 const REASONS: { id: ReportReason; label: string; hint: string; icon: IconName }[] = [
-  { id: 'scam', label: 'Мошенничество', hint: 'Просят оплату, данные карты, коды из SMS', icon: 'shield' },
-  { id: 'spam', label: 'Спам или реклама', hint: 'Не работа, а продажа или реклама', icon: 'ban' },
-  { id: 'rude', label: 'Грубость', hint: 'Оскорбления, дискриминация', icon: 'message' },
-  { id: 'other', label: 'Другое', hint: 'Опишите, что не так', icon: 'help' },
+  { id: 'scam', label: N_('Мошенничество'), hint: N_('Просят оплату, данные карты, коды из SMS'), icon: 'shield' },
+  { id: 'spam', label: N_('Спам или реклама'), hint: N_('Не работа, а продажа или реклама'), icon: 'ban' },
+  { id: 'rude', label: N_('Грубость'), hint: N_('Оскорбления, дискриминация'), icon: 'message' },
+  { id: 'other', label: N_('Другое'), hint: N_('Опишите, что не так'), icon: 'help' },
 ];
 
 const MAX = 500;
@@ -30,12 +31,12 @@ export function ReportSheet({ jobId, jobTitle, onClose, onSent }: Props) {
 
   const submit = async () => {
     if (!reason) {
-      setError('Выберите причину');
+      setError(t('Выберите причину'));
       haptic('error');
       return;
     }
     if (reason === 'other' && !text.trim()) {
-      setError('Коротко опишите, что не так');
+      setError(t('Коротко опишите, что не так'));
       haptic('error');
       return;
     }
@@ -55,18 +56,18 @@ export function ReportSheet({ jobId, jobTitle, onClose, onSent }: Props) {
 
   return (
     <Sheet
-      title="Пожаловаться"
+      title={t('Пожаловаться')}
       onClose={onClose}
       footer={
         <button type="button" className="btn btn--danger btn--wide" onClick={submit} disabled={busy}>
           <Icon name="flag" size={18} />
-          {busy ? 'Отправляем…' : 'Отправить жалобу'}
+          {busy ? t('Отправляем…') : t('Отправить жалобу')}
         </button>
       }
     >
       <div className="report-form">
         <p className="hint small report-form__job">«{jobTitle}»</p>
-        <div className="radio-list" role="radiogroup" aria-label="Причина">
+        <div className="radio-list" role="radiogroup" aria-label={t('Причина')}>
           {REASONS.map((r) => (
             <label key={r.id} className={`radio-row${reason === r.id ? ' radio-row--on' : ''}`}>
               <input
@@ -84,19 +85,19 @@ export function ReportSheet({ jobId, jobTitle, onClose, onSent }: Props) {
                 <Icon name={r.icon} size={20} />
               </span>
               <span className="radio-row__text">
-                <span className="radio-row__label">{r.label}</span>
-                <span className="hint small">{r.hint}</span>
+                <span className="radio-row__label">{t(r.label)}</span>
+                <span className="hint small">{t(r.hint)}</span>
               </span>
             </label>
           ))}
         </div>
         <label className="field">
-          <span className="field__label">Подробности {reason === 'other' ? '' : '(необязательно)'}</span>
+          <span className="field__label">{t('Подробности')} {reason === 'other' ? '' : t('(необязательно)')}</span>
           <textarea
             className="input textarea"
             rows={3}
             maxLength={MAX}
-            placeholder="Что именно не так с заявкой"
+            placeholder={t('Что именно не так с заявкой')}
             value={text}
             onChange={(e) => {
               setText(e.target.value);
@@ -112,7 +113,7 @@ export function ReportSheet({ jobId, jobTitle, onClose, onSent }: Props) {
             {error}
           </div>
         )}
-        <p className="hint small">Жалобу увидят модераторы. Заказчик не узнает, кто пожаловался.</p>
+        <p className="hint small">{t('Жалобу увидят модераторы. Заказчик не узнает, кто пожаловался.')}</p>
       </div>
     </Sheet>
   );

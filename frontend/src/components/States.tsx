@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Icon, type IconName } from './Icon';
 import { useOnReconnect } from '../network';
+import { t } from '../i18n';
 
 export function EmptyState({
   icon,
@@ -33,12 +34,12 @@ export function ErrorState({ text, onRetry }: { text: string; onRetry(): void })
     <EmptyState
       icon="alert"
       tone="danger"
-      title="Не удалось загрузить"
+      title={t('Не удалось загрузить')}
       text={text}
       action={
         <button type="button" className="btn btn--primary" onClick={onRetry}>
           <Icon name="refresh" size={18} />
-          Повторить
+          {t('Повторить')}
         </button>
       }
     />
@@ -46,5 +47,5 @@ export function ErrorState({ text, onRetry }: { text: string; onRetry(): void })
 }
 
 export function Spinner() {
-  return <span className="spinner" role="status" aria-label="Загрузка" />;
+  return <span className="spinner" role="status" aria-label={t('Загрузка')} />;
 }

@@ -1,4 +1,5 @@
 // Типизированный клиент API (docs/api.md). При VITE_MOCK=1 запросы обслуживает src/mock.
+import { getLang, t } from './i18n';
 import { initData } from './telegram';
 import type {
   Job,
@@ -51,9 +52,9 @@ export function onBlocked(cb: BlockedListener): () => void {
   return () => blockedListeners.delete(cb);
 }
 
-/** 403 «Аккаунт заблокирован…» отличается от 403 «не та роль» текстом detail. */
-export function isBlockedError(status: number, detail: string): boolean {
-  return status === 403 && /заблокирован/i.test(detail);
+/** 403 «Аккаунт заблокирован…» отличается от 403 «не та роль» кодом banned (или русским текстом detail). */
+export function isBlockedError(status: number, detail: string, code?: string): boolean {
+  return status === 403 && (code === 'banned' || /заблокирован/i.test(detail));
 }
 
 /** Сообщить о блокировке (из request и из мока). */
@@ -82,7 +83,8 @@ function devUser(): string | null {
 }
 
 function headers(json: boolean): HeadersInit {
-  const h: Record<string, string> = { Accept: 'application/json' };
+  // X-Lang: на этом языке сервер пишет тексты ошибок и подписи справочников
+  const h: Record<string, string> = { Accept: 'application/json', 'X-Lang': getLang() };
   if (json) h['Content-Type'] = 'application/json';
   if (initData) h.Authorization = `tma ${initData}`;
   const dev = devUser();
@@ -104,12 +106,12 @@ function abortError(): DOMException {
 function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) return reject(abortError());
-    const t = window.setTimeout(() => {
+    const timer = window.setTimeout(() => {
       signal?.removeEventListener('abort', onAbort);
       resolve();
     }, ms);
     const onAbort = () => {
-      window.clearTimeout(t);
+      window.clearTimeout(timer);
       reject(abortError());
     };
     signal?.addEventListener('abort', onAbort, { once: true });
@@ -161,12 +163,17 @@ async function attempt<T>(path: string, init: RequestInit, unsafe: boolean): Pro
     }
     if (!res.ok) {
       let detail = '';
+      let code: string | undefined;
       try {
-        detail = detailOf(await res.json());
+        const body: unknown = await res.json();
+        detail = detailOf(body);
+        if (body && typeof body === 'object' && typeof (body as { code?: unknown }).code === 'string') {
+          code = (body as { code: string }).code;
+        }
       } catch {
         /* тело не JSON: например, страница прокси при перезапуске сервера */
       }
-      if (isBlockedError(res.status, detail)) reportBlocked(detail);
+      if (isBlockedError(res.status, detail, code)) reportBlocked(detail);
       throw new ApiError(res.status, detail || `Ошибка ${res.status}`, 'http', unsafe);
     }
     if (res.status === 204) return undefined as T;
@@ -348,9 +355,13 @@ export const api = {
 
 const CYRILLIC = /[а-яё]/i;
 
-/** Сообщение сервера можно показать человеку: русский текст, а не «Not Found» или «Ошибка 418». */
+/**
+ * Сообщение сервера можно показать человеку: наш текст (русский или переведённый сервером по X-Lang),
+ * а не «Not Found» или «Ошибка 418».
+ */
 function humanDetail(msg: string): string {
-  return msg && CYRILLIC.test(msg) && !/^Ошибка \d+$/.test(msg) ? msg : '';
+  if (!msg || /^Ошибка \d+$/.test(msg)) return '';
+  return CYRILLIC.test(msg) || getLang() !== 'ru' ? msg : '';
 }
 
 /** Понятный человеку текст для любой ошибки: показываем его в тостах и на экранах ошибок. */
@@ -360,26 +371,26 @@ export function errorText(e: unknown): string {
     if (e.kind === 'network' || e.kind === 'timeout') {
       const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
       const base = offline
-        ? 'Нет интернета. Проверьте подключение.'
+        ? t('Нет интернета. Проверьте подключение.')
         : e.kind === 'timeout'
-          ? 'Сервер долго не отвечает. Проверьте интернет и попробуйте ещё раз.'
-          : 'Нет связи с сервером. Проверьте интернет.';
-      return e.unsafe ? `${base} Если действие не применилось, повторите его.` : base;
+          ? t('Сервер долго не отвечает. Проверьте интернет и попробуйте ещё раз.')
+          : t('Нет связи с сервером. Проверьте интернет.');
+      return e.unsafe ? `${base} ${t('Если действие не применилось, повторите его.')}` : base;
     }
-    if (e.kind === 'parse') return 'Сервер ответил с ошибкой. Попробуйте ещё раз чуть позже.';
-    if (e.status === 401) return 'Не удалось войти. Закройте приложение и откройте его снова из бота в Telegram.';
-    if (e.status === 429) return human || 'Слишком много действий подряд. Попробуйте чуть позже.';
-    if (e.status >= 500) return 'Сервер временно недоступен. Попробуйте ещё раз через минуту.';
+    if (e.kind === 'parse') return t('Сервер ответил с ошибкой. Попробуйте ещё раз чуть позже.');
+    if (e.status === 401) return t('Не удалось войти. Закройте приложение и откройте его снова из бота в Telegram.');
+    if (e.status === 429) return human || t('Слишком много действий подряд. Попробуйте чуть позже.');
+    if (e.status >= 500) return t('Сервер временно недоступен. Попробуйте ещё раз через минуту.');
     if (human) return human;
-    if (e.status === 403) return 'Это действие вам недоступно.';
-    if (e.status === 404) return 'Не нашли: возможно, это уже удалили.';
-    if (e.status === 409) return 'Не получилось: данные уже изменились. Обновите экран.';
-    if (e.status === 413) return 'Слишком большой запрос. Сократите текст.';
-    if (e.status === 400 || e.status === 422) return 'Проверьте введённые данные.';
-    return 'Что-то пошло не так. Попробуйте ещё раз.';
+    if (e.status === 403) return t('Это действие вам недоступно.');
+    if (e.status === 404) return t('Не нашли: возможно, это уже удалили.');
+    if (e.status === 409) return t('Не получилось: данные уже изменились. Обновите экран.');
+    if (e.status === 413) return t('Слишком большой запрос. Сократите текст.');
+    if (e.status === 400 || e.status === 422) return t('Проверьте введённые данные.');
+    return t('Что-то пошло не так. Попробуйте ещё раз.');
   }
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'Нет интернета. Проверьте подключение.';
-  return 'Что-то пошло не так. Попробуйте ещё раз.';
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return t('Нет интернета. Проверьте подключение.');
+  return t('Что-то пошло не так. Попробуйте ещё раз.');
 }
 
 export function isAbort(e: unknown): boolean {

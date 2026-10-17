@@ -14,11 +14,15 @@ from aiogram.exceptions import (TelegramBadRequest, TelegramEntityTooLarge, Tele
                                 TelegramNetworkError, TelegramRetryAfter, TelegramServerError)
 from aiogram.types import CallbackQuery, ChatMemberUpdated, ErrorEvent, Message
 
+from gigo import i18n
+from gigo.i18n import N_, tr
+
 log = logging.getLogger("gigo.bot")
 
-TEXT_DOWN = "⚠️ Сервис временно недоступен. Попробуйте через минуту."
-TEXT_FAIL = "⚠️ Что-то пошло не так. Попробуйте ещё раз, а если не выйдет, начните заново: /start"
-TEXT_FLOOD = "Слишком часто. Подождите пару секунд."
+# Русские ключи: показывать через tr().
+TEXT_DOWN = N_("⚠️ Сервис временно недоступен. Попробуйте через минуту.")
+TEXT_FAIL = N_("⚠️ Что-то пошло не так. Попробуйте ещё раз, а если не выйдет, начните заново: /start")
+TEXT_FLOOD = N_("Слишком часто. Подождите пару секунд.")
 
 # Ответы Telegram, которые не ошибка: кнопку нажали дважды, сообщение старое или уже изменено.
 HARMLESS = ("message is not modified", "query is too old", "query id is invalid", "message to edit not found",
@@ -74,6 +78,8 @@ class Guard(BaseMiddleware):
 
     async def __call__(self, handler, event, data):
         user = data.get("event_from_user")
+        if user:  # пока не знаем язык из базы — язык Telegram; UserMiddleware потом уточнит
+            i18n.set_lang(user.language_code)
         if isinstance(event, Message):
             if event.chat.type != "private":
                 return None
@@ -81,16 +87,16 @@ class Guard(BaseMiddleware):
             if event.message and event.message.chat.type != "private":
                 return None
             if event.data and _HUGE_NUMBER.search(event.data):
-                await event.answer("Эта кнопка устарела. Начните заново из меню.", show_alert=True)
+                await event.answer(tr("Эта кнопка устарела. Начните заново из меню."), show_alert=True)
                 return None
         if user:
             ok, warn = self.allow(user.id)
             if not ok:
                 log.warning("флуд от %s, событие пропущено", user.id)
                 if isinstance(event, CallbackQuery):
-                    await event.answer(TEXT_FLOOD)
+                    await event.answer(tr(TEXT_FLOOD))
                 elif warn and isinstance(event, Message):
-                    await event.answer(TEXT_FLOOD)
+                    await event.answer(tr(TEXT_FLOOD))
                 return None
         return await handler(event, data)
 
@@ -146,7 +152,7 @@ def install(dp: Dispatcher, pool) -> None:
                 # Состояние диалога могло испортиться: сбрасываем, чтобы человек не застрял.
                 chat_id = message.chat.id if message else (call.message.chat.id if call.message else user.id)
                 await _quiet(dp.fsm.get_context(bot, chat_id=chat_id, user_id=user.id).clear())
-        text = TEXT_DOWN if down else TEXT_FAIL
+        text = tr(TEXT_DOWN if down else TEXT_FAIL)
         # На нажатие отвечаем всплывающим окном; если на него уже ответили, пишем сообщением.
         if not (call and await _quiet(call.answer(text, show_alert=True))) and user:
             await _quiet(bot.send_message(user.id, text))

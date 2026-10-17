@@ -1,12 +1,34 @@
+import { getLang, intlLocale, N_, pluralForms, t, type Lang } from './i18n';
 import type { Job, JobResponse, PayUnit, ResponseStatus } from './types';
 
 const TZ = 'Europe/Moscow';
 
 const dayFmt = new Intl.DateTimeFormat('en-CA', { timeZone: TZ, year: 'numeric', month: '2-digit', day: '2-digit' });
-const timeFmt = new Intl.DateTimeFormat('ru-RU', { timeZone: TZ, hour: '2-digit', minute: '2-digit' });
-const dateFmt = new Intl.DateTimeFormat('ru-RU', { timeZone: TZ, day: 'numeric', month: 'short' });
-const weekdayFmt = new Intl.DateTimeFormat('ru-RU', { timeZone: TZ, weekday: 'short' });
-const numFmt = new Intl.NumberFormat('ru-RU', { maximumFractionDigits: 0 });
+
+type Fmts = { time: Intl.DateTimeFormat; date: Intl.DateTimeFormat; weekday: Intl.DateTimeFormat; num: Intl.NumberFormat; rating: Intl.NumberFormat };
+const fmtCache = new Map<Lang, Fmts>();
+
+/** Форматтеры дат и чисел под текущий язык (если браузер не знает локаль, Intl возьмёт ближайшую). */
+function fmts(): Fmts {
+  const lang = getLang();
+  let f = fmtCache.get(lang);
+  if (!f) {
+    const loc = intlLocale(lang);
+    f = {
+      time: new Intl.DateTimeFormat(loc, { timeZone: TZ, hour: '2-digit', minute: '2-digit', hour12: false }),
+      date: new Intl.DateTimeFormat(loc, { timeZone: TZ, day: 'numeric', month: 'short' }),
+      weekday: new Intl.DateTimeFormat(loc, { timeZone: TZ, weekday: 'short' }),
+      num: new Intl.NumberFormat(loc, { maximumFractionDigits: 0 }),
+      rating: new Intl.NumberFormat(loc, { minimumFractionDigits: 1, maximumFractionDigits: 1 }),
+    };
+    fmtCache.set(lang, f);
+  }
+  return f;
+}
+const timeFmt = { format: (d: Date) => fmts().time.format(d) };
+const dateFmt = { format: (d: Date) => fmts().date.format(d) };
+const weekdayFmt = { format: (d: Date) => fmts().weekday.format(d) };
+const numFmt = { format: (n: number) => fmts().num.format(n) };
 
 /** Дата YYYY-MM-DD по Москве. */
 export function mskDay(d: Date): string {
@@ -30,17 +52,17 @@ export function formatWhen(job: Pick<Job, 'starts_at' | 'starts_on'>): string | 
     const d = new Date(job.starts_at);
     if (Number.isNaN(d.getTime())) return null;
     const rel = dayRelation(mskDay(d));
-    const t = timeFmt.format(d);
-    if (rel === 'today') return `сегодня ${t}`;
-    if (rel === 'tomorrow') return `завтра ${t}`;
-    if (rel === 'yesterday') return `вчера ${t}`;
-    return `${shortDate(d)}, ${t}`;
+    const time = timeFmt.format(d);
+    if (rel === 'today') return t('сегодня {time}', { time });
+    if (rel === 'tomorrow') return t('завтра {time}', { time });
+    if (rel === 'yesterday') return t('вчера {time}', { time });
+    return `${shortDate(d)}, ${time}`;
   }
   if (job.starts_on) {
     const rel = dayRelation(job.starts_on);
-    if (rel === 'today') return 'сегодня';
-    if (rel === 'tomorrow') return 'завтра';
-    if (rel === 'yesterday') return 'вчера';
+    if (rel === 'today') return t('сегодня');
+    if (rel === 'tomorrow') return t('завтра');
+    if (rel === 'yesterday') return t('вчера');
     const d = new Date(`${job.starts_on}T12:00:00+03:00`);
     return Number.isNaN(d.getTime()) ? null : shortDate(d);
   }
@@ -53,16 +75,16 @@ export function formatTime(iso: string): string {
 
 /** «13 мин назад». */
 export function formatAge(iso: string, now = Date.now()): string {
-  const t = new Date(iso).getTime();
-  if (Number.isNaN(t)) return '';
-  const min = Math.max(0, Math.floor((now - t) / 60000));
-  if (min < 1) return 'только что';
-  if (min < 60) return `${min} мин назад`;
+  const ts = new Date(iso).getTime();
+  if (Number.isNaN(ts)) return '';
+  const min = Math.max(0, Math.floor((now - ts) / 60000));
+  if (min < 1) return t('только что');
+  if (min < 60) return t('{n} мин назад', { n: min });
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h} ч назад`;
+  if (h < 24) return t('{n} ч назад', { n: h });
   const d = Math.floor(h / 24);
-  if (d === 1) return 'вчера';
-  return `${d} ${plural(d, ['день', 'дня', 'дней'])} назад`;
+  if (d === 1) return t('вчера');
+  return t('{n} {days} назад', { n: d, days: plural(d, ['день', 'дня', 'дней']) });
 }
 
 /** «до 15:00» или «до завтра 15:00». */
@@ -70,10 +92,10 @@ export function formatUntil(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
   const rel = dayRelation(mskDay(d));
-  const t = timeFmt.format(d);
-  if (rel === 'today') return `до ${t}`;
-  if (rel === 'tomorrow') return `до завтра ${t}`;
-  return `до ${dateFmt.format(d).replace('.', '')} ${t}`;
+  const time = timeFmt.format(d);
+  if (rel === 'today') return t('до {time}', { time });
+  if (rel === 'tomorrow') return t('до завтра {time}', { time });
+  return t('до {date} {time}', { date: dateFmt.format(d).replace('.', ''), time });
 }
 
 export function rub(n: number): string {
@@ -81,23 +103,24 @@ export function rub(n: number): string {
 }
 
 const UNIT_SUFFIX: Record<PayUnit, string> = {
-  hour: '/ч',
-  shift: '/смена',
-  day: '/день',
-  task: ' за работу',
+  hour: N_('/ч'),
+  shift: N_('/смена'),
+  day: N_('/день'),
+  task: N_(' за работу'),
 };
 
+/** Подписи единиц оплаты (русские ключи): показывать через t(). */
 export const UNIT_LABEL: Record<PayUnit, string> = {
-  hour: 'в час',
-  shift: 'за смену',
-  day: 'за день',
-  task: 'за работу',
+  hour: N_('в час'),
+  shift: N_('за смену'),
+  day: N_('за день'),
+  task: N_('за работу'),
 };
 
 /** Главная цифра оплаты: «500 ₽/ч», «≈375 ₽/ч», либо по единице объявления. */
 export function formatPay(job: Job): string | null {
-  if (job.pay_per_hour != null) return `${job.pay_estimated ? '≈' : ''}${rub(job.pay_per_hour)}/ч`;
-  if (job.pay_amount != null) return `${rub(job.pay_amount)}${job.pay_unit ? UNIT_SUFFIX[job.pay_unit] : ''}`;
+  if (job.pay_per_hour != null) return `${job.pay_estimated ? '≈' : ''}${rub(job.pay_per_hour)}${t('/ч')}`;
+  if (job.pay_amount != null) return `${rub(job.pay_amount)}${job.pay_unit ? t(UNIT_SUFFIX[job.pay_unit]) : ''}`;
   return null;
 }
 
@@ -107,9 +130,9 @@ export function formatPayTotal(job: Job): string | null {
 }
 
 export function formatDistance(km: number): string {
-  if (km < 1) return `${Math.max(10, Math.round((km * 1000) / 10) * 10)} м`;
-  if (km < 10) return `${km.toFixed(1).replace('.', ',')} км`;
-  return `${Math.round(km)} км`;
+  if (km < 1) return t('{n} м', { n: Math.max(10, Math.round((km * 1000) / 10) * 10) });
+  if (km < 10) return t('{n} км', { n: km.toFixed(1).replace('.', ',') });
+  return t('{n} км', { n: Math.round(km) });
 }
 
 export function formatHours(h: number): string {
@@ -117,7 +140,15 @@ export function formatHours(h: number): string {
   return `${v} ${plural(Math.ceil(h), ['час', 'часа', 'часов'])}`;
 }
 
+/** Форма слова для числа. forms — русские формы; перевод берётся из словаря по ключу «a|b|c». */
 export function plural(n: number, forms: [string, string, string]): string {
+  const tr = pluralForms(forms);
+  if (tr.length === 1) return tr[0];
+  if (tr.length === 2) return Math.abs(n) === 1 ? tr[0] : tr[1];
+  return russianPlural(n, tr as [string, string, string]);
+}
+
+function russianPlural(n: number, forms: [string, string, string]): string {
   const a = Math.abs(n) % 100;
   const b = a % 10;
   if (a > 10 && a < 20) return forms[2];
@@ -131,12 +162,11 @@ export function lineColor(color: string | null | undefined): string {
   return color.startsWith('#') ? color : `#${color}`;
 }
 
-const ratingFmt = new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 1, maximumFractionDigits: 1 });
 
 /** «★ 4,8 · 12 отзывов» или «нет отзывов». */
 export function formatRating(rating: number | null, count: number): string {
-  if (rating == null || !count) return 'нет отзывов';
-  return `★ ${ratingFmt.format(rating)} · ${count} ${plural(count, ['отзыв', 'отзыва', 'отзывов'])}`;
+  if (rating == null || !count) return t('нет отзывов');
+  return `★ ${fmts().rating.format(rating)} · ${count} ${plural(count, ['отзыв', 'отзыва', 'отзывов'])}`;
 }
 
 export function formatDate(iso: string): string {
@@ -154,11 +184,12 @@ export function jobState(job: Pick<Job, 'status' | 'expires_at'>, now = Date.now
   return job.status === 'open' ? 'open' : 'closed';
 }
 
+/** Русские ключи: показывать через t(). */
 export const JOB_STATE_LABEL: Record<JobState, string> = {
-  open: 'Идёт набор',
-  closed: 'Набор закрыт',
-  cancelled: 'Отменена',
-  expired: 'Срок вышел',
+  open: N_('Идёт набор'),
+  closed: N_('Набор закрыт'),
+  cancelled: N_('Отменена'),
+  expired: N_('Срок вышел'),
 };
 
 export const JOB_STATE_TONE: Record<JobState, Tone> = { open: 'ok', closed: 'muted', cancelled: 'bad', expired: 'muted' };
@@ -167,18 +198,18 @@ export type Tone = 'ok' | 'wait' | 'bad' | 'muted';
 
 /** Как статус отклика видит исполнитель. */
 export const RESPONSE_LABEL_WORKER: Record<ResponseStatus, string> = {
-  pending: 'Ждёт ответа',
-  accepted: 'Вас выбрали',
-  rejected: 'Не выбрали',
-  withdrawn: 'Вы отозвали',
+  pending: N_('Ждёт ответа'),
+  accepted: N_('Вас выбрали'),
+  rejected: N_('Не выбрали'),
+  withdrawn: N_('Вы отозвали'),
 };
 
 /** Как статус отклика видит заказчик. */
 export const RESPONSE_LABEL_OWNER: Record<ResponseStatus, string> = {
-  pending: 'Новый',
-  accepted: 'Принят',
-  rejected: 'Отклонён',
-  withdrawn: 'Отозван',
+  pending: N_('Новый'),
+  accepted: N_('Принят'),
+  rejected: N_('Отклонён'),
+  withdrawn: N_('Отозван'),
 };
 
 export const RESPONSE_TONE: Record<ResponseStatus, Tone> = { pending: 'wait', accepted: 'ok', rejected: 'bad', withdrawn: 'muted' };

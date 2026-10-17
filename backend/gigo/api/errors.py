@@ -18,7 +18,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from gigo import actions
+from gigo import actions, i18n
+from gigo.i18n import N_, tr
 
 log = logging.getLogger("gigo.api")
 
@@ -30,14 +31,14 @@ CODES = {400: "bad_request", 401: "unauthorized", 403: "forbidden", 404: "not_fo
          503: "unavailable", 504: "timeout"}
 
 # Стандартные английские тексты Starlette («Not Found») заменяем русскими.
-DEFAULT_TEXTS = {400: "Неверный запрос", 401: "Нужен вход через Telegram", 403: "Нет доступа",
-                 404: "Не найдено", 405: "Такой запрос не поддерживается", 413: "Слишком большой запрос",
-                 429: "Слишком много запросов. Подождите минуту.",
-                 500: "Что-то пошло не так. Попробуйте ещё раз чуть позже.",
-                 503: "Сервер сейчас недоступен. Попробуйте ещё раз через минуту."}
+DEFAULT_TEXTS = {400: N_("Неверный запрос"), 401: N_("Нужен вход через Telegram"), 403: N_("Нет доступа"),
+                 404: N_("Не найдено"), 405: N_("Такой запрос не поддерживается"), 413: N_("Слишком большой запрос"),
+                 429: N_("Слишком много запросов. Подождите минуту."),
+                 500: N_("Что-то пошло не так. Попробуйте ещё раз чуть позже."),
+                 503: N_("Сервер сейчас недоступен. Попробуйте ещё раз через минуту.")}
 
-DB_UNAVAILABLE = "База данных сейчас недоступна. Попробуйте ещё раз через минуту."
-DB_BUSY = "Сервер сейчас перегружен. Попробуйте ещё раз."
+DB_UNAVAILABLE = N_("База данных сейчас недоступна. Попробуйте ещё раз через минуту.")
+DB_BUSY = N_("Сервер сейчас перегружен. Попробуйте ещё раз.")
 
 _REQUEST_ID = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
@@ -49,6 +50,8 @@ def request_id(request: Request) -> str | None:
 def error_response(request: Request | None, status: int, detail: str, code: str | None = None,
                    headers: dict | None = None, **extra) -> JSONResponse:
     rid = request_id(request) if request else None
+    # тексты ошибок — русские ключи: переводим на язык из заголовка X-Lang (выставлен в GuardMiddleware)
+    detail = i18n.translate(detail)
     body = {"detail": detail, "code": code or CODES.get(status, "error"), **extra}
     if rid:
         body["request_id"] = rid
@@ -61,50 +64,52 @@ def error_response(request: Request | None, status: int, detail: str, code: str 
 # --- ошибки валидации -----------------------------------------------------------
 
 FIELD_NAMES = {
-    "category": "Категория", "title": "Название", "description": "Описание", "workers_needed": "Сколько человек",
-    "pay_amount": "Оплата", "pay_unit": "Единица оплаты", "pay_timing": "Когда оплата", "starts_on": "Дата",
-    "start_time": "Время начала", "duration_hours": "Длительность", "metro_id": "Метро", "address": "Адрес",
-    "lat": "Точка на карте", "lng": "Точка на карте", "message": "Сообщение", "status": "Статус",
-    "rating": "Оценка", "text": "Текст", "reason": "Причина", "role": "Роль", "about": "О себе",
-    "skills": "Навыки", "name": "Название", "categories": "Категории", "metro_ids": "Станции метро",
-    "pay_min": "Оплата от", "radius_km": "Радиус", "worker_id": "Исполнитель", "response_id": "Отклик",
-    "q": "Поиск", "limit": "Размер страницы", "offset": "Страница",
+    "category": N_("Категория"), "title": N_("Название"), "description": N_("Описание"), "workers_needed": N_("Сколько человек"),
+    "pay_amount": N_("Оплата"), "pay_unit": N_("Единица оплаты"), "pay_timing": N_("Когда оплата"), "starts_on": N_("Дата"),
+    "start_time": N_("Время начала"), "duration_hours": N_("Длительность"), "metro_id": N_("Метро"), "address": N_("Адрес"),
+    "lat": N_("Точка на карте"), "lng": N_("Точка на карте"), "message": N_("Сообщение"), "status": N_("Статус"),
+    "rating": N_("Оценка"), "text": N_("Текст"), "reason": N_("Причина"), "role": N_("Роль"), "about": N_("О себе"),
+    "skills": N_("Навыки"), "name": N_("Название"), "categories": N_("Категории"), "metro_ids": N_("Станции метро"),
+    "pay_min": N_("Оплата от"), "radius_km": N_("Радиус"), "worker_id": N_("Исполнитель"), "response_id": N_("Отклик"),
+    "q": N_("Поиск"), "limit": N_("Размер страницы"), "offset": N_("Страница"), "lang": N_("Язык"),
 }
 
 
 def _reason(err: dict) -> str:
     t, ctx = err.get("type", ""), err.get("ctx") or {}
     if t == "missing":
-        return "заполните это поле"
+        return tr("заполните это поле")
     if t == "string_too_long":
-        return f"не длиннее {ctx.get('max_length')} знаков"
+        return tr("не длиннее {n} знаков", n=ctx.get("max_length"))
     if t == "string_too_short":
-        return f"не короче {ctx.get('min_length')} знаков"
+        return tr("не короче {n} знаков", n=ctx.get("min_length"))
     if t == "too_long":
-        return f"не больше {ctx.get('max_length')} значений"
+        return tr("не больше {n} значений", n=ctx.get("max_length"))
     if t in ("greater_than", "greater_than_equal", "less_than", "less_than_equal", "finite_number"):
-        return "значение вне допустимых границ"
+        return tr("значение вне допустимых границ")
     if t in ("int_parsing", "int_type", "int_from_float", "float_parsing", "float_type"):
-        return "нужно число"
+        return tr("нужно число")
     if t in ("literal_error", "enum"):
-        return "недопустимое значение"
+        return tr("недопустимое значение")
     if t.startswith("date") or t.startswith("time"):
-        return "неверная дата или время"
+        return tr("неверная дата или время")
     if t == "string_pattern_mismatch":
-        return "неверный формат"
-    return "неверное значение"
+        return tr("неверный формат")
+    return tr("неверное значение")
 
 
 def validation_message(errors: list[dict]) -> str:
     if not errors:
-        return "Проверьте введённые данные"
+        return N_("Проверьте введённые данные")
     err = errors[0]
     if err.get("type") in ("json_invalid", "model_attributes_type", "dict_type") or err.get("loc") == ("body",):
-        return "Неверный формат запроса"
+        return N_("Неверный формат запроса")
     names = [str(x) for x in err.get("loc", ()) if isinstance(x, str) and x not in ("body", "query", "path", "header")]
     field = names[-1] if names else ""
     label = FIELD_NAMES.get(field)
-    return f"{label}: {_reason(err)}" if label else f"Проверьте введённые данные: {_reason(err)}"
+    if label:
+        return tr("{field}: {reason}", field=tr(label), reason=_reason(err))
+    return tr("Проверьте введённые данные: {reason}", reason=_reason(err))
 
 
 def _safe_errors(errors) -> list[dict]:
@@ -130,13 +135,13 @@ def db_error(request: Request, e: Exception) -> JSONResponse:
         log.warning("база занята: %s %s [%s]", type(e).__name__, request.url.path, request_id(request))
         return error_response(request, 503, DB_BUSY, "db_busy", {"Retry-After": "2"})
     if isinstance(e, asyncpg.UniqueViolationError):
-        return error_response(request, 409, "Такая запись уже есть", "duplicate")
+        return error_response(request, 409, N_("Такая запись уже есть"), "duplicate")
     if isinstance(e, asyncpg.ForeignKeyViolationError):
-        return error_response(request, 409, "Связанная запись не найдена или уже удалена", "conflict")
+        return error_response(request, 409, N_("Связанная запись не найдена или уже удалена"), "conflict")
     if isinstance(e, (asyncpg.DataError, asyncpg.IntegrityConstraintViolationError)):
         # DataError: число вне диапазона bigint, неверный формат и т.п.; Check/NotNull: нарушено ограничение таблицы
         log.warning("данные отклонены базой: %s %s [%s]", type(e).__name__, request.url.path, request_id(request))
-        return error_response(request, 422, "Неверные данные в запросе", "invalid")
+        return error_response(request, 422, N_("Неверные данные в запросе"), "invalid")
     log.error("ошибка базы %s на %s [%s]", type(e).__name__, request.url.path, request_id(request), exc_info=e)
     return error_response(request, 500, DEFAULT_TEXTS[500], "internal")
 
@@ -159,6 +164,8 @@ class GuardMiddleware:
         if scope["type"] != "http":
             return await self.app(scope, receive, send)
         headers = {k.decode("latin-1").lower(): v.decode("latin-1") for k, v in scope.get("headers", [])}
+        # язык ответа: Mini App присылает выбранный язык в X-Lang
+        i18n.set_lang(headers.get("x-lang"))
         rid = headers.get("x-request-id", "")
         rid = rid if _REQUEST_ID.match(rid) else secrets.token_hex(6)
         scope.setdefault("state", {})["request_id"] = rid
@@ -183,7 +190,7 @@ class GuardMiddleware:
             if started:
                 return
             too_large = False
-            body = json.dumps({"detail": detail, "code": code, "request_id": rid}, ensure_ascii=False).encode()
+            body = json.dumps({"detail": i18n.translate(detail), "code": code, "request_id": rid}, ensure_ascii=False).encode()
             await send_with_id({"type": "http.response.start", "status": status, "headers": [
                 (b"content-type", b"application/json"), (b"content-length", str(len(body)).encode()),
                 (b"cache-control", b"no-store")]})
@@ -239,8 +246,10 @@ def install(app: FastAPI) -> None:
     async def http_error(request: Request, e: StarletteHTTPException):
         detail = e.detail if isinstance(e.detail, str) else None
         if not detail or detail == HTTPStatus(e.status_code).phrase:
-            detail = DEFAULT_TEXTS.get(e.status_code, detail or "Ошибка")
-        return error_response(request, e.status_code, detail, headers=getattr(e, "headers", None))
+            detail = DEFAULT_TEXTS.get(e.status_code, detail or N_("Ошибка"))
+        # блокировку Mini App узнаёт по коду: текст переводится на язык пользователя
+        code = "banned" if e.status_code == 403 and "заблокирован" in detail else None
+        return error_response(request, e.status_code, detail, code, headers=getattr(e, "headers", None))
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request: Request, e: RequestValidationError):

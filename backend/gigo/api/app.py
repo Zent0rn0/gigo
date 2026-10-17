@@ -18,13 +18,14 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as _BaseModel, ConfigDict, Field
 
-from gigo import actions, config, db, events, rules
+from gigo import actions, config, db, events, i18n, rules
 from gigo.api import errors
 from gigo.api.auth import InitDataError, TgUser, validate_init_data
 from gigo.actions import check_recent
 from gigo.api.limits import RateLimiter
 from gigo.categories import CATEGORIES, PAY_UNITS
 from gigo.geo import Geocoder
+from gigo.i18n import N_, tr
 from gigo.jobs_query import JobFilter, build_feed, jobs_where, like_pattern, rating_join, responses_where
 from gigo.migrate import migrate
 
@@ -117,25 +118,26 @@ async def current_user(
         try:
             user = validate_init_data(authorization[4:], settings.bot_token)
         except InitDataError as e:
-            raise HTTPException(401, f"Вход не подтверждён: {e}")
+            raise HTTPException(401, tr("Вход не подтверждён: {reason}", reason=tr(str(e))))
     elif settings.dev_auth and _is_local(request):
         # Вход без Telegram только с этой же машины: через туннель или прокси так не войти.
         uid = x_dev_user or 1
         user = TgUser(uid, f"dev{uid}", f"Разработчик {uid}")
     else:
-        raise HTTPException(401, "Откройте приложение из Telegram")
+        raise HTTPException(401, N_("Откройте приложение из Telegram"))
+    # язык: выбранный в профиле, иначе язык Telegram (запоминаем его при первом входе)
     row = await request.app.state.pool.fetchrow(
-        """INSERT INTO users (tg_id, username, first_name) VALUES ($1, $2, $3)
+        """INSERT INTO users (tg_id, username, first_name, lang) VALUES ($1, $2, $3, $4)
            ON CONFLICT (tg_id) DO UPDATE SET username = EXCLUDED.username, first_name = EXCLUDED.first_name,
-               last_seen_at = now()
+               lang = COALESCE(users.lang, EXCLUDED.lang), last_seen_at = now()
            RETURNING tg_id, username, first_name, role, banned_at""",
-        user.id, user.username, (user.first_name or "")[:64] or None,
+        user.id, user.username, (user.first_name or "")[:64] or None, i18n.normalize(user.language_code),
     )
     if row["banned_at"]:
-        raise HTTPException(403, "Аккаунт заблокирован за нарушение правил Gigo. "
-                                 "Если это ошибка, напишите боту.")
+        raise HTTPException(403, N_("Аккаунт заблокирован за нарушение правил Gigo. "
+                                    "Если это ошибка, напишите боту."))
     if request.method != "GET" and not mutations.hit(user.id):
-        raise HTTPException(429, "Слишком много действий подряд. Подождите минуту.")
+        raise HTTPException(429, N_("Слишком много действий подряд. Подождите минуту."))
     return Me(row["tg_id"], row["username"], row["first_name"], row["role"])
 
 
@@ -144,8 +146,9 @@ User = Annotated[Me, Depends(current_user)]
 
 def require_role(user: Me, role: str) -> None:
     if user.role != role:
-        who = "заказчика" if role == "employer" else "исполнителя"
-        raise HTTPException(403, f"Это действие для {who}. Роль меняется в профиле.")
+        if role == "employer":
+            raise HTTPException(403, N_("Это действие для заказчика. Роль меняется в профиле."))
+        raise HTTPException(403, N_("Это действие для исполнителя. Роль меняется в профиле."))
 
 
 def _num(v):
@@ -172,7 +175,7 @@ async def health(request: Request):
 # --- профиль ------------------------------------------------------------
 
 ME_SQL = f"""
-SELECT u.tg_id, u.username, u.first_name, u.role, u.about, u.skills, ur.rating, ur.reviews_count
+SELECT u.tg_id, u.username, u.first_name, u.role, u.about, u.skills, u.lang, ur.rating, ur.reviews_count
 FROM users u {rating_join("ur", "u.tg_id")} WHERE u.tg_id = $1
 """
 
@@ -180,7 +183,7 @@ FROM users u {rating_join("ur", "u.tg_id")} WHERE u.tg_id = $1
 def me_out(r) -> dict:
     return {"id": r["tg_id"], "username": r["username"], "first_name": r["first_name"], "role": r["role"],
             "about": r["about"], "skills": list(r["skills"]), "rating": _num(r["rating"]),
-            "reviews_count": r["reviews_count"]}
+            "reviews_count": r["reviews_count"], "lang": r["lang"]}
 
 
 @app.get("/api/me")
@@ -198,6 +201,7 @@ class MeIn(BaseModel):
     role: Literal["employer", "worker"] | None = None
     about: str | None = Field(default=None, max_length=500)
     skills: list[Short] | None = Field(default=None, max_length=MAX_SKILLS)
+    lang: Literal[tuple(i18n.LANGUAGES)] | None = None  # type: ignore[valid-type]
 
 
 def _skills(ids: list[str]) -> list[str]:
@@ -209,7 +213,9 @@ def _skills(ids: list[str]) -> list[str]:
 async def patch_me(request: Request, body: MeIn, user: User):
     fields = body.model_dump(exclude_unset=True)
     if "role" in fields and fields["role"] is None:
-        raise HTTPException(422, "Выберите роль")
+        raise HTTPException(422, N_("Выберите роль"))
+    if "lang" in fields and fields["lang"] is None:
+        raise HTTPException(422, N_("Выберите язык"))
     if "about" in fields:
         fields["about"] = _clean(fields["about"])
     if "skills" in fields:
@@ -225,7 +231,7 @@ async def get_user(request: Request, user_id: int, viewer: User):
     p = pool(request)
     r = await p.fetchrow(ME_SQL, user_id)
     if not r:
-        raise HTTPException(404, "Пользователь не найден")
+        raise HTTPException(404, N_("Пользователь не найден"))
     if r["role"] == "worker":
         jobs_count = await p.fetchval(
             "SELECT count(*) FROM responses WHERE worker_id = $1 AND status = 'accepted'", user_id)
@@ -261,8 +267,8 @@ async def meta(request: Request, _: User):
         "FROM metro_stations WHERE city = $1 ORDER BY name, id", CITY["id"],
     )
     return {
-        "categories": [{"id": k, "label": label, "emoji": emoji} for k, (label, emoji) in CATEGORIES.items()],
-        "pay_units": [{"id": k, "label": label} for k, label in PAY_UNITS.items()],
+        "categories": [{"id": k, "label": i18n.tr(label), "emoji": emoji} for k, (label, emoji) in CATEGORIES.items()],
+        "pay_units": [{"id": k, "label": i18n.tr(label)} for k, label in PAY_UNITS.items()],
         "metro": [{"id": r["id"], "name": r["name"], "line": r["line"],
                    "color": f"#{r['line_color']}" if r["line_color"] else None, "lat": r["lat"], "lng": r["lng"]}
                   for r in rows],
@@ -352,12 +358,12 @@ async def jobs_with_my_responses(p, user: Me, rows) -> list[dict]:
 async def load_job(p, user: Me, job_id: int) -> dict:
     row = await p.fetchrow(jobs_where("j.id = $2"), user.id, job_id)
     if not row:
-        raise HTTPException(404, "Заявка не найдена")
+        raise HTTPException(404, N_("Заявка не найдена"))
     [job] = await jobs_with_my_responses(p, user, [row])
     visible = (row["status"] == "open" and row["expires_at"] > datetime.now(timezone.utc)
                and row["hidden_at"] is None) or job["is_mine"] or job["my_response"]
     if not visible:
-        raise HTTPException(404, "Заявка закрыта")
+        raise HTTPException(404, N_("Заявка закрыта"))
     if job["is_mine"]:
         job["responses"] = await fetch_responses(p, user.id, "r.job_id = $2", job_id)
     return job
@@ -449,11 +455,11 @@ async def edit_job(request: Request, job_id: int, body: JobIn, user: User):
 
     def check_editable(job) -> None:
         if not job or job["employer_id"] != user.id:
-            raise HTTPException(404, "Заявка не найдена")
+            raise HTTPException(404, N_("Заявка не найдена"))
         if job["hidden_at"]:
-            raise HTTPException(409, "Заявку скрыл модератор, изменить её нельзя.")
+            raise HTTPException(409, N_("Заявку скрыл модератор, изменить её нельзя."))
         if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc):
-            raise HTTPException(409, "Изменить можно только открытую заявку. Для новой даты нажмите «Повторить».")
+            raise HTTPException(409, N_("Изменить можно только открытую заявку. Для новой даты нажмите «Повторить»."))
 
     job = await p.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
     check_editable(job)
@@ -462,7 +468,7 @@ async def edit_job(request: Request, job_id: int, body: JobIn, user: User):
         fields = await actions.job_fields(conn, request.app.state.geocoder, _new_job(body), job["created_at"])
     if fields["expires_at"] <= datetime.now(timezone.utc):
         # Заявка без даты старше трёх дней: правка не продлевает её бесконечно.
-        raise HTTPException(409, "Срок заявки прошёл. Создайте новую.")
+        raise HTTPException(409, N_("Срок заявки прошёл. Создайте новую."))
     n = len(actions.JOB_COLUMNS)
     sets = ", ".join(f"{c} = ${i}" for i, c in enumerate(actions.JOB_COLUMNS, start=2))
     location = actions.LOCATION_SQL.format(lat=n + 2, lng=n + 3)
@@ -472,7 +478,7 @@ async def edit_job(request: Request, job_id: int, body: JobIn, user: User):
         check_editable(job)
         if fields["workers_needed"] < (accepted := await conn.fetchval(
                 "SELECT count(*) FROM responses WHERE job_id = $1 AND status = 'accepted'", job_id)):
-            raise HTTPException(422, f"Вы уже выбрали {accepted} исполнителей: меньше указать нельзя.")
+            raise HTTPException(422, tr("Вы уже выбрали {n} исполнителей: меньше указать нельзя.", n=accepted))
         await conn.execute(
             f"UPDATE jobs SET {sets}, location = {location}, updated_at = now() WHERE id = $1",
             job_id, *(fields[c] for c in actions.JOB_COLUMNS), fields["lat"], fields["lng"],
@@ -551,7 +557,7 @@ async def save_job(request: Request, job_id: int, user: User):
     p = pool(request)
     await load_job(p, user, job_id)  # 404, если заявку не видно
     if await p.fetchval("SELECT count(*) FROM saved_jobs WHERE user_id = $1", user.id) >= MAX_SAVED:
-        raise HTTPException(409, f"В избранном уже {MAX_SAVED} заявок. Уберите старые.")
+        raise HTTPException(409, tr("В избранном уже {n} заявок. Уберите старые.", n=MAX_SAVED))
     await p.execute("INSERT INTO saved_jobs (user_id, job_id) VALUES ($1, $2) ON CONFLICT DO NOTHING", user.id, job_id)
     return Response(status_code=204)
 
@@ -609,21 +615,21 @@ async def invite_worker(request: Request, job_id: int, body: InviteIn, user: Use
     async with p.acquire() as conn, conn.transaction():
         job = await conn.fetchrow("SELECT * FROM jobs WHERE id = $1", job_id)
         if not job or job["employer_id"] != user.id:
-            raise HTTPException(404, "Заявка не найдена")
+            raise HTTPException(404, N_("Заявка не найдена"))
         if job["status"] != "open" or job["expires_at"] <= datetime.now(timezone.utc) or job["hidden_at"]:
-            raise HTTPException(409, "Пригласить можно только на открытую заявку")
+            raise HTTPException(409, N_("Пригласить можно только на открытую заявку"))
         worker = await conn.fetchrow("SELECT role, banned_at FROM users WHERE tg_id = $1", body.worker_id)
         if not worker or worker["role"] != "worker" or worker["banned_at"]:
-            raise HTTPException(404, "Исполнитель не найден")
+            raise HTTPException(404, N_("Исполнитель не найден"))
         if await conn.fetchval("SELECT 1 FROM responses WHERE job_id = $1 AND worker_id = $2 "
                                "AND status IN ('pending', 'accepted')", job_id, body.worker_id):
-            raise HTTPException(409, "Он уже откликнулся на эту заявку")
+            raise HTTPException(409, N_("Он уже откликнулся на эту заявку"))
         await check_recent(conn, "SELECT count(*) FROM invites i JOIN jobs j ON j.id = i.job_id "
                                  "WHERE j.employer_id = $1 AND i.created_at > now() - interval '1 hour'",
-                           user.id, 30, "Не больше 30 приглашений в час. Попробуйте позже.")
+                           user.id, 30, N_("Не больше 30 приглашений в час. Попробуйте позже."))
         if not await conn.fetchval("INSERT INTO invites (job_id, worker_id) VALUES ($1, $2) "
                                    "ON CONFLICT DO NOTHING RETURNING 1", job_id, body.worker_id):
-            raise HTTPException(409, "Вы уже пригласили его на эту заявку")
+            raise HTTPException(409, N_("Вы уже пригласили его на эту заявку"))
         await events.invited(conn, job, user.first_name, body.worker_id)
     return Response(status_code=204)
 
@@ -641,7 +647,7 @@ async def report_job(request: Request, job_id: int, body: ReportIn, user: User):
     async with p.acquire() as conn, conn.transaction():
         await check_recent(conn, "SELECT count(*) FROM reports WHERE author_id = $1 "
                                  "AND created_at > now() - interval '1 day'",
-                           user.id, 10, "Не больше 10 жалоб в сутки.")
+                           user.id, 10, N_("Не больше 10 жалоб в сутки."))
         await actions.report_job(conn, job_id, user.id, body.reason, _clean(body.text),
                                  request.app.state.settings.admin_ids)
     return Response(status_code=204)
@@ -698,7 +704,7 @@ async def list_subscriptions(request: Request, user: User):
 async def create_subscription(request: Request, body: SubscriptionIn, user: User):
     p = pool(request)
     if await p.fetchval("SELECT count(*) FROM subscriptions WHERE user_id = $1", user.id) >= MAX_SUBSCRIPTIONS:
-        raise HTTPException(409, f"Можно не больше {MAX_SUBSCRIPTIONS} подписок")
+        raise HTTPException(409, tr("Можно не больше {n} подписок", n=MAX_SUBSCRIPTIONS))
     categories = [c for c in body.categories if c in CATEGORIES]
     has_point = body.lat is not None and body.lng is not None
     row = await p.fetchrow(
@@ -727,7 +733,7 @@ if (STATIC_DIR / "index.html").exists():
     @app.get("/{path:path}", include_in_schema=False)
     async def spa(path: str):
         if path == "api" or path.startswith("api/"):
-            raise HTTPException(404, "Не найдено")
+            raise HTTPException(404, N_("Не найдено"))
         file = (STATIC_DIR / path).resolve()
         if path and file.is_file() and STATIC_DIR.resolve() in file.parents:
             return FileResponse(file)

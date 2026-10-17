@@ -15,9 +15,9 @@ from aiogram.client.telegram import TelegramAPIServer
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.types import MenuButtonDefault, MenuButtonWebApp, WebAppInfo
 
-from gigo import config, db
+from gigo import config, db, i18n
 from gigo.bot import look
-from gigo.bot.handlers import COMMANDS, make_dispatcher
+from gigo.bot.handlers import commands, make_dispatcher
 from gigo.bot.loops import notify_once, remind_once, send_outbox_once  # noqa: F401  (тесты импортируют отсюда)
 from gigo.migrate import migrate
 
@@ -74,7 +74,16 @@ async def setup(bot: Bot, settings) -> None:
         if sets := [s for s in os.getenv("CUSTOM_EMOJI_SETS", "").replace(" ", "").split(",") if s]:
             n = await look.load_custom_emoji(bot, sets)
             log.info("премиум-эмодзи: %d замен из наборов %s", n, ", ".join(sets))
-        await bot.set_my_commands(COMMANDS)
+        with i18n.using(i18n.DEFAULT):  # по умолчанию (и для русского Telegram) — по-русски
+            await bot.set_my_commands(commands())
+        for code in i18n.LANGUAGES:
+            if code == i18n.DEFAULT:
+                continue
+            try:
+                with i18n.using(code):
+                    await bot.set_my_commands(commands(), language_code=code)
+            except Exception as e:
+                log.warning("не удалось задать команды для языка %s: %r", code, e)
         if settings.webapp_url:
             await bot.set_chat_menu_button(
                 menu_button=MenuButtonWebApp(text="Gigo", web_app=WebAppInfo(url=settings.webapp_url))

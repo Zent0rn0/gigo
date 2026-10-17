@@ -9,12 +9,13 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
-from gigo import actions, config, rules
+from gigo import actions, config, i18n, rules
 from gigo.bot import look
-from gigo.bot.common import ANSWER, BTN_NEW, MENU, Kb, app, btn, category_rows, ensure_role
+from gigo.bot.common import ANSWER, BTN_NEW, Kb, app, btn, category_rows, ensure_role, is_btn, menu
 from gigo.categories import CATEGORIES, PAY_UNITS, SCAM_FLAGS
 from gigo.format import esc, job_message
 from gigo.geo import Geocoder
+from gigo.i18n import tr
 
 NEAREST_METRO_M = 1500
 _TIME = re.compile(r"^\s*(\d{1,2})(?:\s*[:.\-\s]\s*(\d{2}))?\s*$")
@@ -38,7 +39,8 @@ class NewJobForm(StatesGroup):
     confirm = State()
 
 
-CANCEL = btn("✖️ Отмена", "cancel")
+def cancel() -> dict:
+    return btn(tr("✖️ Отмена"), "cancel")
 
 
 def parse_time(text: str) -> time | None:
@@ -82,12 +84,12 @@ def preview(d: dict) -> str:
         "pay_total": rules.pay_total(d["pay_amount"], d["pay_unit"], d.get("duration_hours")),
         "pay_amount": d["pay_amount"], "pay_unit": d["pay_unit"], "pay_timing": None,
         "starts_on": day, "starts_at": rules.starts_at(day, at), "duration_hours": d.get("duration_hours"),
-        "address": d.get("address") or ("точка на карте" if d.get("lat") else None),
+        "address": d.get("address") or (tr("точка на карте") if d.get("lat") else None),
     }
     lines = [job_message(job, d.get("metro_name"))]
     if d.get("address") and d.get("metro_name"):
         lines.append(f"🏠 {esc(d['address'])}")
-    lines.append(f"👥 Нужно: {d['workers_needed']}")
+    lines.append(tr("👥 Нужно: {n}", n=d['workers_needed']))
     if d.get("description"):
         lines.append(f"\n<blockquote expandable>{esc(d['description'])}</blockquote>")
     return "\n".join(lines)
@@ -114,74 +116,74 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def ask_category(message: Message, state: FSMContext) -> None:
         await state.clear()
         await state.set_state(NewJobForm.category)
-        await look.show(message, "➕ <b>Новая заявка</b>\n<i>7 коротких шагов, большинство кнопками.</i>\n\n"
-                                 "<b>Шаг 1 из 7</b> · Какая работа?",
-                        kb(*category_rows("nj:cat:"), [CANCEL]), banner="new")
+        await look.show(message, tr("➕ <b>Новая заявка</b>\n<i>7 коротких шагов, большинство кнопками.</i>\n\n"
+                                    "<b>Шаг 1 из 7</b> · Какая работа?"),
+                        kb(*category_rows("nj:cat:"), [cancel()]), banner="new")
 
     async def ask_title(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.title)
-        await message.answer("<b>Шаг 2 из 7</b> · Что нужно сделать? Коротко, одной строкой.\n"
-                             "Например: <i>Разгрузить фуру с мебелью</i>", reply_markup=kb([CANCEL]))
+        await message.answer(tr("<b>Шаг 2 из 7</b> · Что нужно сделать? Коротко, одной строкой.\n"
+                                "Например: <i>Разгрузить фуру с мебелью</i>"), reply_markup=kb([cancel()]))
 
     async def ask_unit(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.unit)
-        units = [btn(label.capitalize(), f"nj:unit:{key}") for key, label in PAY_UNITS.items()]
-        await message.answer("<b>Шаг 3 из 7</b> · Как платите?", reply_markup=kb(units[:2], units[2:], [CANCEL]))
+        units = [btn(tr(label).capitalize(), f"nj:unit:{key}") for key, label in PAY_UNITS.items()]
+        await message.answer(tr("<b>Шаг 3 из 7</b> · Как платите?"), reply_markup=kb(units[:2], units[2:], [cancel()]))
 
     async def ask_amount(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.amount)
         unit = PAY_UNITS[(await state.get_data())["pay_unit"]]
-        await message.answer(f"Сколько рублей {unit}? Напишите число, например <i>3000</i>.",
-                             reply_markup=kb([CANCEL]))
+        await message.answer(tr("Сколько рублей {unit}? Напишите число, например <i>3000</i>.", unit=tr(unit)),
+                             reply_markup=kb([cancel()]))
 
     async def ask_day(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.day)
-        await message.answer("<b>Шаг 4 из 7</b> · Когда? Выберите день или напишите дату, например <i>15.10</i>.",
-                             reply_markup=kb([btn("Сегодня", "nj:day:0"), btn("Завтра", "nj:day:1"),
-                                              btn("Послезавтра", "nj:day:2")],
-                                             [btn("Без даты, когда удобно", "nj:day:x")], [CANCEL]))
+        await message.answer(tr("<b>Шаг 4 из 7</b> · Когда? Выберите день или напишите дату, например <i>15.10</i>."),
+                             reply_markup=kb([btn(tr("Сегодня"), "nj:day:0"), btn(tr("Завтра"), "nj:day:1"),
+                                              btn(tr("Послезавтра"), "nj:day:2")],
+                                             [btn(tr("Без даты, когда удобно"), "nj:day:x")], [cancel()]))
 
     async def ask_time(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.time)
         times = [btn(t, f"nj:time:{t}") for t in ("08:00", "09:00", "10:00", "12:00", "14:00", "18:00")]
-        await message.answer("Во сколько начало? Выберите или напишите, например <i>9:30</i>.",
-                             reply_markup=kb(times[:3], times[3:], [btn("Время договоримся", "nj:time:x")], [CANCEL]))
+        await message.answer(tr("Во сколько начало? Выберите или напишите, например <i>9:30</i>."),
+                             reply_markup=kb(times[:3], times[3:], [btn(tr("Время договоримся"), "nj:time:x")], [cancel()]))
 
     async def ask_duration(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.duration)
-        hours = [btn(f"{h} ч", f"nj:dur:{h}") for h in (2, 4, 6, 8, 12)]
-        await message.answer("Сколько часов займёт работа? Можно написать число.",
-                             reply_markup=kb(hours, [btn("Не знаю", "nj:dur:x")], [CANCEL]))
+        hours = [btn(tr("{h} ч", h=h), f"nj:dur:{h}") for h in (2, 4, 6, 8, 12)]
+        await message.answer(tr("Сколько часов займёт работа? Можно написать число."),
+                             reply_markup=kb(hours, [btn(tr("Не знаю"), "nj:dur:x")], [cancel()]))
 
     async def ask_place(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.place)
         await state.update_data(metro_id=None, metro_name=None, address=None, lat=None, lng=None)
-        await message.answer("<b>Шаг 5 из 7</b> · Где? Напишите станцию метро (<i>Таганская</i>), адрес "
-                             "(<i>Тверская 7</i>) или оба через запятую (<i>Таганская, Марксистская 3</i>). "
-                             "Можно отправить геопозицию: 📎 → Геопозиция.", reply_markup=kb([CANCEL]))
+        await message.answer(tr("<b>Шаг 5 из 7</b> · Где? Напишите станцию метро (<i>Таганская</i>), адрес "
+                                "(<i>Тверская 7</i>) или оба через запятую (<i>Таганская, Марксистская 3</i>). "
+                                "Можно отправить геопозицию: 📎 → Геопозиция."), reply_markup=kb([cancel()]))
 
     async def ask_workers(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.workers)
-        await message.answer("<b>Шаг 6 из 7</b> · Сколько человек нужно? Больше пяти — напишите число.",
-                             reply_markup=kb([btn(str(n), f"nj:n:{n}") for n in range(1, 6)], [CANCEL]))
+        await message.answer(tr("<b>Шаг 6 из 7</b> · Сколько человек нужно? Больше пяти — напишите число."),
+                             reply_markup=kb([btn(str(n), f"nj:n:{n}") for n in range(1, 6)], [cancel()]))
 
     async def ask_description(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.description)
-        await message.answer("<b>Шаг 7 из 7</b> · Детали: что взять с собой, как найти, когда оплата. "
-                             "Напишите одним сообщением или пропустите.",
-                             reply_markup=kb([btn("Пропустить", "nj:skip")], [CANCEL]))
+        await message.answer(tr("<b>Шаг 7 из 7</b> · Детали: что взять с собой, как найти, когда оплата. "
+                                "Напишите одним сообщением или пропустите."),
+                             reply_markup=kb([btn(tr("Пропустить"), "nj:skip")], [cancel()]))
 
     async def ask_confirm(message: Message, state: FSMContext) -> None:
         await state.set_state(NewJobForm.confirm)
         d = await state.get_data()
-        await message.answer("👀 <b>Проверьте заявку</b>\n\n" + preview(d),
-                             reply_markup=kb([btn("✅ Опубликовать", "nj:pub", "success")],
-                                             [btn("✏️ Заполнить заново", "nj:start"), CANCEL]))
+        await message.answer(tr("👀 <b>Проверьте заявку</b>") + "\n\n" + preview(d),
+                             reply_markup=kb([btn(tr("✅ Опубликовать"), "nj:pub", "success")],
+                                             [btn(tr("✏️ Заполнить заново"), "nj:start"), cancel()]))
 
     # --- обработчики ------------------------------------------------------------
 
     @r.message(Command("new"))
-    @r.message(F.text == BTN_NEW)
+    @r.message(is_btn(BTN_NEW))
     async def new(message: Message, state: FSMContext) -> None:
         await ask_category(message, state)
 
@@ -197,18 +199,18 @@ def make_router(settings: config.Settings, pool) -> Router:
             await call.answer()
             return
         await state.update_data(category=cat)
-        await chosen(call, CATEGORIES[cat][0])
+        await chosen(call, tr(CATEGORIES[cat][0]))
         await ask_title(call.message, state)
 
     @r.message(NewJobForm.title, ANSWER)
     async def title(message: Message, state: FSMContext) -> None:
         text = rules.clean(message.text) or ""
         if not 3 <= len(text) <= 100:
-            await message.answer("Нужно от 3 до 100 знаков. Подробности добавите на последнем шаге.")
+            await message.answer(tr("Нужно от 3 до 100 знаков. Подробности добавите на последнем шаге."))
             return
         if flags := rules.scam_flags(text):
-            await message.answer(f"Такую заявку опубликовать нельзя: {SCAM_FLAGS[flags[0]]}. "
-                                 "Если это ошибка, переформулируйте.")
+            await message.answer(tr("Такую заявку опубликовать нельзя: {reason}. "
+                                    "Если это ошибка, переформулируйте.", reason=tr(SCAM_FLAGS[flags[0]])))
             return
         await state.update_data(title=text)
         await ask_unit(message, state)
@@ -220,14 +222,14 @@ def make_router(settings: config.Settings, pool) -> Router:
             await call.answer()
             return
         await state.update_data(pay_unit=key)
-        await chosen(call, PAY_UNITS[key])
+        await chosen(call, tr(PAY_UNITS[key]))
         await ask_amount(call.message, state)
 
     @r.message(NewJobForm.amount, ANSWER)
     async def amount(message: Message, state: FSMContext) -> None:
         value = parse_amount(message.text)
         if not value:
-            await message.answer("Напишите сумму числом, например <i>3000</i>.")
+            await message.answer(tr("Напишите сумму числом, например <i>3000</i>."))
             return
         await state.update_data(pay_amount=value)
         await ask_day(message, state)
@@ -243,7 +245,7 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def day_button(call: CallbackQuery, state: FSMContext) -> None:
         key = call.data[7:]
         day = None if key == "x" else datetime.now(rules.MSK).date() + timedelta(days=int(key))
-        await chosen(call, day.strftime("%d.%m") if day else "без даты")
+        await chosen(call, day.strftime("%d.%m") if day else tr("без даты"))
         await set_day(call.message, state, day)
 
     @r.message(NewJobForm.day, ANSWER)
@@ -251,8 +253,8 @@ def make_router(settings: config.Settings, pool) -> Router:
         today = datetime.now(rules.MSK).date()
         day = parse_day(message.text, today)
         if not day or day > today + timedelta(days=actions.MAX_DAYS_AHEAD):
-            await message.answer(f"Не понял дату. Напишите день и месяц, например <i>15.10</i>, "
-                                 f"не дальше {actions.MAX_DAYS_AHEAD} дней вперёд.")
+            await message.answer(tr("Не понял дату. Напишите день и месяц, например <i>15.10</i>, "
+                                    "не дальше {n} дней вперёд.", n=actions.MAX_DAYS_AHEAD))
             return
         await set_day(message, state, day)
 
@@ -261,7 +263,7 @@ def make_router(settings: config.Settings, pool) -> Router:
         if at and d.get("starts_on"):
             start = rules.starts_at(date.fromisoformat(d["starts_on"]), at)
             if start < datetime.now(rules.MSK) - timedelta(minutes=30):
-                await message.answer("Это время уже прошло. Выберите другое или другой день: /new")
+                await message.answer(tr("Это время уже прошло. Выберите другое или другой день: /new"))
                 return False
         await state.update_data(start_time=at.strftime("%H:%M") if at else None)
         await ask_duration(message, state)
@@ -273,13 +275,13 @@ def make_router(settings: config.Settings, pool) -> Router:
         at = None if key == "x" else parse_time(key)
         await call.answer()
         if await set_time(call.message, state, at):
-            await chosen(call, key if at else "договоримся")
+            await chosen(call, key if at else tr("договоримся"))
 
     @r.message(NewJobForm.time, ANSWER)
     async def time_text(message: Message, state: FSMContext) -> None:
         at = parse_time(message.text)
         if not at:
-            await message.answer("Напишите время как <i>9:30</i> или <i>18</i>.")
+            await message.answer(tr("Напишите время как <i>9:30</i> или <i>18</i>."))
             return
         await set_time(message, state, at)
 
@@ -287,14 +289,14 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def duration_button(call: CallbackQuery, state: FSMContext) -> None:
         key = call.data[7:]
         await state.update_data(duration_hours=None if key == "x" else float(key))
-        await chosen(call, f"{key} ч" if key != "x" else "не знаю")
+        await chosen(call, tr("{h} ч", h=key) if key != "x" else tr("не знаю"))
         await ask_place(call.message, state)
 
     @r.message(NewJobForm.duration, ANSWER)
     async def duration_text(message: Message, state: FSMContext) -> None:
         hours = parse_number(message.text)
         if not hours or not 0 < hours <= 24:
-            await message.answer("Напишите число часов от 1 до 24.")
+            await message.answer(tr("Напишите число часов от 1 до 24."))
             return
         await state.update_data(duration_hours=hours)
         await ask_place(message, state)
@@ -314,7 +316,7 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def place_text(message: Message, state: FSMContext) -> None:
         text = rules.clean(message.text) or ""
         if len(text) > 200:
-            await message.answer("Слишком длинно: до 200 знаков.")
+            await message.answer(tr("Слишком длинно: до 200 знаков."))
             return
         head, _, rest = text.partition(",")
         found = await find_metro(head)
@@ -327,7 +329,7 @@ def make_router(settings: config.Settings, pool) -> Router:
         elif found and not rest:
             await state.update_data(address=text)
             rows = [[btn(f"Ⓜ️ {m['name']} ({m['line']})"[:60], f"nj:metro:{m['id']}")] for m in found]
-            await message.answer("Какая станция?", reply_markup=kb(*rows, [btn("Это адрес, не метро", "nj:addr")]))
+            await message.answer(tr("Какая станция?"), reply_markup=kb(*rows, [btn(tr("Это адрес, не метро"), "nj:addr")]))
         else:
             await state.update_data(address=text)
             await ask_workers(message, state)
@@ -339,12 +341,12 @@ def make_router(settings: config.Settings, pool) -> Router:
             await call.answer()
             return
         await state.update_data(metro_id=m["id"], metro_name=m["name"], address=None)
-        await chosen(call, f"м. {m['name']}")
+        await chosen(call, tr("м. {name}", name=m['name']))
         await ask_workers(call.message, state)
 
     @r.callback_query(NewJobForm.place, F.data == "nj:addr")
     async def place_address(call: CallbackQuery, state: FSMContext) -> None:
-        await chosen(call, "адрес")
+        await chosen(call, tr("адрес"))
         await ask_workers(call.message, state)
 
     @r.message(NewJobForm.place, F.location)
@@ -358,7 +360,8 @@ def make_router(settings: config.Settings, pool) -> Router:
         )
         await state.update_data(lat=loc.latitude, lng=loc.longitude,
                                 metro_id=m["id"] if m else None, metro_name=m["name"] if m else None)
-        await message.answer("📍 Точку запомнил" + (f", рядом м. {m['name']}." if m else "."), reply_markup=MENU)
+        await message.answer(tr("📍 Точку запомнил, рядом м. {name}.", name=m['name']) if m else tr("📍 Точку запомнил."),
+                             reply_markup=menu())
         await ask_workers(message, state)
 
     @r.callback_query(NewJobForm.workers, F.data.regexp(r"^nj:n:\d+$"))
@@ -372,7 +375,7 @@ def make_router(settings: config.Settings, pool) -> Router:
     async def workers_text(message: Message, state: FSMContext) -> None:
         n = parse_number(message.text)
         if not n or n != int(n) or not 1 <= n <= 50:
-            await message.answer("Напишите число от 1 до 50.")
+            await message.answer(tr("Напишите число от 1 до 50."))
             return
         await state.update_data(workers_needed=int(n))
         await ask_description(message, state)
@@ -380,13 +383,13 @@ def make_router(settings: config.Settings, pool) -> Router:
     @r.callback_query(NewJobForm.description, F.data == "nj:skip")
     async def description_skip(call: CallbackQuery, state: FSMContext) -> None:
         await state.update_data(description=None)
-        await chosen(call, "без деталей")
+        await chosen(call, tr("без деталей"))
         await ask_confirm(call.message, state)
 
     @r.message(NewJobForm.description, ANSWER)
     async def description(message: Message, state: FSMContext) -> None:
         if len(message.text) > 2000:
-            await message.answer(f"Длинновато: {len(message.text)} знаков из 2000.")
+            await message.answer(tr("Длинновато: {n} знаков из 2000.", n=len(message.text)))
             return
         await state.update_data(description=message.text)
         await ask_confirm(message, state)
@@ -406,17 +409,17 @@ def make_router(settings: config.Settings, pool) -> Router:
             async with pool.acquire() as conn:
                 job_id = await actions.create_job(conn, geocoder, call.from_user.id, body)
         except actions.ActionError as e:
-            await call.answer(e.detail, show_alert=True)
+            await call.answer(i18n.translate(e.detail), show_alert=True)
             return
         await state.clear()
         await ensure_role(pool, call.from_user.id, "employer")
-        await chosen(call, "опубликовано")
+        await chosen(call, tr("опубликовано"))
         await look.show(
             call.message,
-            "🚀 <b>Заявка опубликована!</b>\n\n"
-            "🔔 Исполнители с подходящей подпиской получат её прямо сейчас.\n"
-            "🙋 Отклики будут приходить сюда: принять или отклонить можно прямо в чате.",
-            kb([btn("⚙️ Управлять заявкой", f"mj:{job_id}", "primary")],
-               [app("Открыть в приложении", f"?job={job_id}")]), banner="published")
+            tr("🚀 <b>Заявка опубликована!</b>\n\n"
+               "🔔 Исполнители с подходящей подпиской получат её прямо сейчас.\n"
+               "🙋 Отклики будут приходить сюда: принять или отклонить можно прямо в чате."),
+            kb([btn(tr("⚙️ Управлять заявкой"), f"mj:{job_id}", "primary")],
+               [app(tr("Открыть в приложении"), f"?job={job_id}")]), banner="published")
 
     return r

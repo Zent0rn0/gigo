@@ -1,5 +1,7 @@
 // Тонкая обёртка над Telegram.WebApp: в обычном браузере всё безопасно ничего не делает.
 
+import { t } from './i18n';
+
 interface TgBackButton {
   isVisible: boolean;
   show(): void;
@@ -30,7 +32,7 @@ interface TgMainButton {
 
 export interface TgWebApp {
   initData: string;
-  initDataUnsafe: { start_param?: string; user?: { id: number; first_name?: string } };
+  initDataUnsafe: { start_param?: string; user?: { id: number; first_name?: string; language_code?: string } };
   version: string;
   platform: string;
   colorScheme: 'light' | 'dark';
@@ -62,6 +64,9 @@ export const initData: string = tg?.initData ?? '';
 
 /** Запущено ли внутри Telegram (есть подписанные данные). */
 export const inTelegram = initData.length > 0;
+
+/** Язык интерфейса Telegram у пользователя («ru», «uz», «en-US»…). */
+export const telegramLanguage: string | undefined = tg?.initDataUnsafe?.user?.language_code;
 
 function atLeast(v: string): boolean {
   try {
@@ -152,7 +157,7 @@ export function openContact(url: string): void {
   }
   if (/^tg:/i.test(url) && inTelegram && tg?.showAlert) {
     // Mini App не открывает tg://user?id=…: у человека нет username, ссылка на профиль есть в сообщении бота.
-    tg.showAlert('У этого человека нет имени пользователя в Telegram. Ссылка на его профиль пришла вам в чат с ботом Gigo.');
+    tg.showAlert(t('У этого человека нет имени пользователя в Telegram. Ссылка на его профиль пришла вам в чат с ботом Gigo.'));
     return;
   }
   window.open(url, '_blank', 'noopener');

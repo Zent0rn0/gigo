@@ -7,6 +7,7 @@ import { EmptyState, ErrorState } from '../components/States';
 import { ContactButton, StatusChip } from '../components/ui';
 import { RESPONSE_LABEL_WORKER, RESPONSE_TONE } from '../format';
 import { jobState } from '../format';
+import { t } from '../i18n';
 import { haptic } from '../telegram';
 import type { Job, Meta, MyResponse } from '../types';
 
@@ -89,19 +90,21 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
   return (
     <div className="screen">
       <header className="feed-head">
-        <h1 className="app-title">Отклики</h1>
+        <h1 className="app-title">{t('Отклики')}</h1>
         <p className="hint lead">
           {status === 'ready' && items.length
             ? accepted
-              ? `Вас выбрали в ${accepted} ${accepted === 1 ? 'заявке' : 'заявках'}. Напишите заказчику.`
-              : 'Ответ заказчика придёт сообщением от бота.'
-            : 'Здесь заявки, на которые вы откликнулись.'}
+              ? accepted === 1
+                ? t('Вас выбрали в {n} заявке. Напишите заказчику.', { n: accepted })
+                : t('Вас выбрали в {n} заявках. Напишите заказчику.', { n: accepted })
+              : t('Ответ заказчика придёт сообщением от бота.')
+            : t('Здесь заявки, на которые вы откликнулись.')}
         </p>
-        <div className="segmented segmented--tabs" role="tablist" aria-label="Что показать">
+        <div className="segmented segmented--tabs" role="tablist" aria-label={t('Что показать')}>
           {(
             [
-              ['responses', 'Отклики', 'inbox'],
-              ['saved', 'Избранное', 'bookmark'],
+              ['responses', t('Отклики'), 'inbox'],
+              ['saved', t('Избранное'), 'bookmark'],
             ] as const
           ).map(([id, label, icon]) => (
             <button
@@ -134,12 +137,12 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
           {!savedError && saved?.length === 0 && (
             <EmptyState
               icon="bookmark"
-              title="В избранном пусто"
-              text="Откройте заявку и нажмите закладку вверху, чтобы вернуться к ней позже."
+              title={t('В избранном пусто')}
+              text={t('Откройте заявку и нажмите закладку вверху, чтобы вернуться к ней позже.')}
               action={
                 <button type="button" className="btn btn--secondary" onClick={onGoFeed}>
                   <Icon name="feed" size={18} />
-                  Открыть ленту
+                  {t('Открыть ленту')}
                 </button>
               }
             />
@@ -152,10 +155,10 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
                   <div key={j.id} className={open ? undefined : 'dim'}>
                     <JobCard job={j} category={catById.get(j.category)} onOpen={onOpenJob} />
                     <div className="card-actions">
-                      {!open && <span className="hint small">Набор закрыт</span>}
+                      {!open && <span className="hint small">{t('Набор закрыт')}</span>}
                       <button type="button" className="btn btn--sm btn--secondary" onClick={() => unsave(j)}>
                         <Icon name="x" size={16} />
-                        Убрать
+                        {t('Убрать')}
                       </button>
                     </div>
                   </div>
@@ -178,12 +181,12 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
         <EmptyState
           icon="inbox"
           tone="brand"
-          title="Откликов пока нет"
-          text="Найдите подходящую заявку в ленте и нажмите «Откликнуться»."
+          title={t('Откликов пока нет')}
+          text={t('Найдите подходящую заявку в ленте и нажмите «Откликнуться».')}
           action={
             <button type="button" className="btn btn--primary" onClick={onGoFeed}>
               <Icon name="feed" size={18} />
-              Открыть ленту
+              {t('Открыть ленту')}
             </button>
           }
         />
@@ -202,7 +205,7 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
                 onOpen={onOpenJob}
                 footer={
                   <div className="job-card__foot">
-                    <StatusChip tone={RESPONSE_TONE[r.status]}>{RESPONSE_LABEL_WORKER[r.status]}</StatusChip>
+                    <StatusChip tone={RESPONSE_TONE[r.status]}>{t(RESPONSE_LABEL_WORKER[r.status])}</StatusChip>
                     <span className="hint small job-card__who">{r.job.employer.first_name}</span>
                   </div>
                 }
@@ -216,7 +219,7 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
                     onClick={() => setReview({ responseId: r.id, name: r.job.employer.first_name, jobTitle: r.job.title, initial: r.my_review })}
                   >
                     <Icon name="star" size={16} filled={!!r.my_review} />
-                    {r.my_review ? `Ваш отзыв: ${r.my_review.rating}` : 'Оставить отзыв'}
+                    {r.my_review ? t('Ваш отзыв: {rating}', { rating: r.my_review.rating }) : t('Оставить отзыв')}
                   </button>
                 </div>
               )}
@@ -232,7 +235,7 @@ export function MyResponses({ meta, active, version, onOpenJob, onGoFeed, onChan
           onSaved={(rv) => {
             setItems((l) => l.map((x) => (x.id === review.responseId ? { ...x, my_review: rv } : x)));
             setReview(null);
-            toast('Спасибо за отзыв!');
+            toast(t('Спасибо за отзыв!'));
             onChanged();
           }}
         />

@@ -1,4 +1,5 @@
 // Типы по контракту docs/api.md
+import type { Lang } from './i18n';
 
 export type Role = 'worker' | 'employer';
 
@@ -55,12 +56,15 @@ export interface Me {
   skills: string[];
   rating: number | null;
   reviews_count: number;
+  /** Язык интерфейса; null — не выбран (тогда язык Telegram). */
+  lang?: Lang | null;
 }
 
 export interface MePatch {
   role?: Role;
   about?: string;
   skills?: string[];
+  lang?: Lang;
 }
 
 /** Короткая карточка второй стороны (заказчик в Job, исполнитель в Response). */
